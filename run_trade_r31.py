@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import FinanceDataReader as fdr
 import yfinance as yf
-import datetime, requests, np
+import datetime, requests, numpy as np
 import plotly.express as px
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from streamlit_gsheets import GSheetsConnection
