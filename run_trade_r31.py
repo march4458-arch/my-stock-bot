@@ -192,72 +192,29 @@ with tabs[1]:
 
 # --- [🔍 스캐너] ---
 with tabs[2]:
-    if st.button("🚀 수급/신뢰도순 전수 조사"):
+    if st.button("🚀 신뢰도순 전수 조사"):
         stocks = get_krx_list()
-        # 시총 5,000억 이상 상위 50개 종목 필터링
         targets = stocks[stocks['Marcap'] >= 500000000000].sort_values(by='Marcap', ascending=False).head(50)
         found = []
+        with ThreadPoolExecutor(max_workers=5) as exec:
+            futures = {exec.submit(get_hybrid_indicators, fetch_stock_smart(r['Code'])): r['Name'] for _, r in targets.iterrows()}
+            for f in as_completed(futures):
+                name = futures[f]; df_scan = f.result()
+                if df_scan is not None and df_scan.iloc[-1]['RSI'] < 48:
+                    s = calculate_organic_strategy(df_scan)
+                    cp = df_scan.iloc[-1]['Close']
+                    score = (100 - s['rsi']) + (((s['sell'][0]-cp)/cp)*150)
+                    found.append({"name": name, "cp": cp, "strat": s, "score": score})
         
-        with st.spinner("외인/기관 수급 데이터 정밀 분석 중..."):
-            with ThreadPoolExecutor(max_workers=5) as exec:
-                # 분석 엔진 실행 (수급 데이터 포함)
-                futures = {exec.submit(get_hybrid_indicators, fetch_stock_smart(r['Code'])): r['Name'] for _, r in targets.iterrows()}
-                
-                for f in as_completed(futures):
-                    name = futures[f]
-                    df_scan = f.result()
-                    
-                    if df_scan is not None and df_scan.iloc[-1]['RSI'] < 55: # 과열되지 않은 종목 위주
-                        # 전략 산출
-                        s = calculate_organic_strategy(df_scan)
-                        cp = df_scan.iloc[-1]['Close']
-                        
-                        # [고도화] 신뢰 점수 계산 (RSI + 지지선 + 수급 + 기대수익)
-                        # 수급 점수 추정: 거래량 폭발 + 양봉 여부
-                        vol_avg = df_scan['Volume'].rolling(10).mean().iloc[-1]
-                        supply_boost = 25 if (df_scan['Volume'].iloc[-1] > vol_avg * 1.3 and df_scan['Close'].iloc[-1] > df_scan['Open'].iloc[-1]) else 0
-                        
-                        rsi_score = max(0, (60 - df_scan.iloc[-1]['RSI']) * 0.41)
-                        ob_dist = abs(cp - s['ob']) / s['ob']
-                        ob_score = max(0, 25 * (1 - ob_dist * 10))
-                        upside_score = min(25, ((s['sell'][0] - cp) / cp) * 100)
-                        
-                        # 최종 통합 점수 (100점 만점)
-                        total_score = rsi_score + ob_score + supply_boost + upside_score
-                        
-                        found.append({
-                            "name": name, 
-                            "cp": cp, 
-                            "strat": s, 
-                            "score": total_score
-                        })
-        
-        # 점수 높은 순으로 정렬
         found = sorted(found, key=lambda x: x['score'], reverse=True)
-        
-        # 결과 출력 (V62.1 고유 UI 유지)
         for idx, d in enumerate(found):
             icon = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else "🔹"
-            # 75점 이상인 경우 테두리 강조 컬러 변경
-            border_color = "#4FACFE" if d['score'] >= 75 else "#444"
-            
-            st.markdown(f"""
-            <div style="background:#1E1E1E; padding:20px; border-radius:15px; border-left:10px solid {border_color}; margin-bottom:15px;">
-                <h3 style="margin-bottom:5px;">{icon} {d['name']} <small style="color:#aaa;">(신뢰점수: {d['score']:.1f}점)</small></h3>
-                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px; font-family:monospace; font-size:15px;">
-                    <div style="background:#1B2635; padding:10px; border-radius:8px;">
-                        <b style="color:#4FACFE;">🔵 매수타점</b><br>
-                        1차: {d['strat']['buy'][0]:>8,}원<br>
-                        2차: {d['strat']['buy'][1]:>8,}원
-                    </div>
-                    <div style="background:#2D1B1B; padding:10px; border-radius:8px;">
-                        <b style="color:#FF4B4B;">🔴 매도목표</b><br>
-                        1차: {d['strat']['sell'][0]:>8,}원<br>
-                        2차: {d['strat']['sell'][1]:>8,}원
-                    </div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(f"""<div style="background:#1E1E1E; padding:20px; border-radius:15px; border-left:10px solid #4FACFE; margin-bottom:15px;">
+                <h3>{icon} {d['name']} <small>(점수: {d['score']:.1f})</small></h3>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px; font-family:monospace;">
+                    <div><b>🔵 매수타점</b><br>1차: {d['strat']['buy'][0]:>8,}원<br>2차: {d['strat']['buy'][1]:>8,}원</div>
+                    <div><b>🔴 매도목표</b><br>1차: {d['strat']['sell'][0]:>8,}원<br>2차: {d['strat']['sell'][1]:>8,}원</div>
+                </div></div>""", unsafe_allow_html=True)
 
 # --- [➕ 관리] ---
 with tabs[4]:
