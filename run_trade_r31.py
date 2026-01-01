@@ -10,27 +10,32 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from streamlit_gsheets import GSheetsConnection
 
 # ==========================================
-# ⚙️ 1. 시스템 설정 및 구글 시트 연동
+# ⚙️ 1. 시스템 설정 및 구글 시트 연동 (에러 방지 강화)
 # ==========================================
 st.set_page_config(page_title="주식 비서 V62.1 Hybrid Final", page_icon="⚡", layout="wide")
 
-# 구글 시트 데이터 로드 및 타입 보정
+# 구글 시트 데이터 로드 및 타입 보정 (JSONDecodeError 방지)
 def get_portfolio_gsheets():
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = conn.read(ttl=0)
         if df is not None and not df.empty:
             df = df.dropna(how='all')
-            # 산산 오류 방지를 위한 타입 변환
+            # 필수 컬럼 존재 확인 및 타입 강제 변환
+            cols = ['Code', 'Name', 'Buy_Price', 'Qty']
+            for col in cols:
+                if col not in df.columns:
+                    df[col] = 0 if col in ['Buy_Price', 'Qty'] else ""
+            
             df['Buy_Price'] = pd.to_numeric(df['Buy_Price'], errors='coerce').fillna(0)
             df['Qty'] = pd.to_numeric(df['Qty'], errors='coerce').fillna(0)
             df['Code'] = df['Code'].astype(str).str.zfill(6)
             return df
         return pd.DataFrame(columns=['Code', 'Name', 'Buy_Price', 'Qty'])
-    except Exception as e:
+    except Exception:
+        # 연결 오류 시 빈 프레임 반환하여 앱 중단 차단
         return pd.DataFrame(columns=['Code', 'Name', 'Buy_Price', 'Qty'])
 
-# 구글 시트 저장 함수
 def save_portfolio_gsheets(df):
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
@@ -39,7 +44,6 @@ def save_portfolio_gsheets(df):
     except Exception as e:
         st.error(f"구글 시트 저장 실패: {e}")
 
-# 텔레그램 메시지 전송
 def send_telegram_msg(token, chat_id, message):
     if token and chat_id:
         try:
@@ -56,8 +60,12 @@ def get_krx_list():
 def get_fear_greed_index():
     try:
         url = "https://production.dataviz.cnn.io/index/feargreed/static/data"
-        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=2)
-        return r.json()['now']['value'], r.json()['now']['value_text']
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get(url, headers=headers, timeout=3)
+        if r.status_code == 200:
+            data = r.json()
+            return data['now']['value'], data['now']['value_text']
+        return 50, "Neutral"
     except: return 50, "Neutral"
 
 # ==========================================
@@ -84,13 +92,11 @@ def get_hybrid_indicators(df):
     df['MA120'] = close.rolling(120).mean()
     df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
     
-    # RSI 계산
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     df['RSI'] = 100 - (100 / (1 + (gain / loss.replace(0, np.nan)).fillna(0)))
     
-    # OB(Order Block) 수급 지지선 계산
     ob_zones = []
     avg_vol = df['Volume'].rolling(20).mean()
     for i in range(len(df)-40, len(df)-1):
@@ -98,14 +104,12 @@ def get_hybrid_indicators(df):
             ob_zones.append(df['Low'].iloc[i-1])
     df['OB_Price'] = np.mean(ob_zones) if ob_zones else df['MA120'].iloc[-1]
     
-    # 피보나치 되돌림 (1년 고가/저가 기준)
     hi_1y, lo_1y = df.tail(252)['High'].max(), df.tail(252)['Low'].min()
     range_1y = hi_1y - lo_1y
     df['Fibo_382'] = hi_1y - (range_1y * 0.382)
     df['Fibo_500'] = hi_1y - (range_1y * 0.500)
     df['Fibo_618'] = hi_1y - (range_1y * 0.618)
     
-    # 추세 국면 판별
     slope = (df['MA120'].iloc[-1] - df['MA120'].iloc[-20]) / df['MA120'].iloc[-20] * 100
     df['Regime'] = "🚀 상승" if slope > 0.4 else "📉 하락" if slope < -0.4 else "↔️ 횡보"
     return df
@@ -131,7 +135,6 @@ def calculate_organic_strategy(df, buy_price=0):
         buy = [adj(f500), adj(ob), adj(f618)]
         sell = [adj(f382), adj(df.tail(252)['High'].max()), adj(df.tail(252)['High'].max() + atr)]
 
-    # 물타기/불타기 메시지
     pyramiding = {"type": "💤 관망", "msg": "현재 대응 구간 대기 중", "color": "#777"}
     if buy_price > 0:
         yield_pct = (cp - buy_price) / buy_price * 100
@@ -143,7 +146,7 @@ def calculate_organic_strategy(df, buy_price=0):
     return {"buy": buy, "sell": sell, "stop": adj(min(buy) * 0.93), "regime": regime, "ob": ob, "rsi": curr['RSI'], "pyramiding": pyramiding}
 
 # ==========================================
-# 🖥️ 3. UI 구성 (통합 탭)
+# 🖥️ 3. UI 구성 및 탭 구성
 # ==========================================
 with st.sidebar:
     st.title("🛡️ Hybrid Turbo Final")
@@ -201,12 +204,12 @@ with tabs[1]:
             col_b.info(f"🔵 **3분할 매수 타점**\n\n1차: {strat['buy'][0]:,}원\n\n2차: {strat['buy'][1]:,}원\n\n3차: {strat['buy'][2]:,}원")
             col_s.success(f"🔴 **3분할 매도 목표**\n\n1차: {strat['sell'][0]:,}원\n\n2차: {strat['sell'][1]:,}원\n\n3차: {strat['sell'][2]:,}원")
             
-            fig = go.Figure(data=[go.Candlestick(x=df_detail.tail(150).index, open=df_detail.tail(150)['Open'], high=df_detail.tail(150)['High'], low=df_detail.tail(150)['Low'], close=df_detail.tail(150)['Close'], name="주가")])
+            fig = go.Figure(data=[go.Candlestick(x=df_detail.tail(150).index, open=df_detail.tail(150)['Open'], high=df_detail.tail(150)['High'], low=df_detail.tail(150)['Low'], close=df_detail.tail(150)['Close'], name="Price")])
             fig.add_hline(y=strat['ob'], line_color="yellow", annotation_text="OB Support")
             fig.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
 
-# --- [🔍 탭 2: 스캐너 (이미지 UI 재현)] ---
+# --- [🔍 탭 2: 스캐너 (사진 UI 재현)] ---
 with tabs[2]:
     st.header("🔍 확률 기반 타점 스캐너")
     if st.button("🚀 AI 분석 전수 조사 시작"):
@@ -214,11 +217,11 @@ with tabs[2]:
         targets = stocks[stocks['Marcap'] >= 500000000000].sort_values(by='Marcap', ascending=False).head(50)
         found = []
         progress = st.progress(0)
-        with ThreadPoolExecutor(max_workers=10) as exec:
+        with ThreadPoolExecutor(max_workers=8) as exec: # API 안정성을 위해 worker 축소
             futures = {exec.submit(get_hybrid_indicators, fetch_stock_smart(r['Code'])): r['Name'] for _, r in targets.iterrows()}
             for i, f in enumerate(as_completed(futures)):
                 name = futures[f]; df_scan = f.result()
-                if df_scan is not None and df_scan.iloc[-1]['RSI'] < 50:
+                if df_scan is not None and df_scan.iloc[-1]['RSI'] < 52:
                     s_scan = calculate_organic_strategy(df_scan)
                     cp = df_scan.iloc[-1]['Close']
                     upside = ((s_scan['sell'][0] - cp) / cp) * 100
