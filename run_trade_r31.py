@@ -14,13 +14,13 @@ from streamlit_gsheets import GSheetsConnection
 # ==========================================
 st.set_page_config(page_title="주식 비서 V62.1 Full Spec Pro", page_icon="⚡", layout="wide")
 
-# 함수 이름을 하나로 통일하여 NameError 방지
+# 모든 데이터 호출 함수명을 get_portfolio_gsheets로 통일하여 NameError 방지
 def get_portfolio_gsheets():
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = conn.read(ttl=0)
         return df.dropna(how='all') if df is not None else pd.DataFrame(columns=['Code', 'Name', 'Buy_Price', 'Qty'])
-    except:
+    except Exception as e:
         return pd.DataFrame(columns=['Code', 'Name', 'Buy_Price', 'Qty'])
 
 def save_portfolio_gsheets(df):
@@ -28,8 +28,8 @@ def save_portfolio_gsheets(df):
         conn = st.connection("gsheets", type=GSheetsConnection)
         conn.update(data=df)
         st.success("구글 시트 동기화 완료!")
-    except:
-        st.error("구글 시트 저장 실패")
+    except Exception as e:
+        st.error(f"구글 시트 저장 실패: {e}")
 
 @st.cache_data(ttl=3600)
 def get_krx_list(): 
@@ -88,6 +88,7 @@ def calculate_advanced_score(df, strat):
     rsi = df['RSI'].iloc[-1]
     cp = df['Close'].iloc[-1]
     ob = df['OB_Price'].iloc[-1]
+    # 수급 점수 추정: 거래량 폭발 + 양봉 여부
     vol_avg = df['Volume'].rolling(10).mean().iloc[-1]
     supply_boost = 25 if (df['Volume'].iloc[-1] > vol_avg * 1.3 and df['Close'].iloc[-1] > df['Open'].iloc[-1]) else 0
     rsi_score = max(0, (60 - rsi) * 0.41)
@@ -111,24 +112,24 @@ def get_strategy(df, buy_price=0):
     if buy_price > 0:
         yield_pct = (cp - buy_price) / buy_price * 100
         if yield_pct < -5: pyramiding = {"type": "💧 물타기", "msg": f"평단 대비 {yield_pct:.1f}% 손실. {buy[1]:,}원 지점에서 비중 확대 권장", "color": "#FF4B4B"}
-        elif yield_pct > 7: pyramiding = {"type": "🔥 불타기", "msg": f"수익권 진입. 추가 매수 시나리오 가동", "color": "#4FACFE"}
+        elif yield_pct > 7: pyramiding = {"type": "🔥 불타기", "msg": f"수익권 진입. {cp+atr*0.5:,}원 돌파 시 추가 매수 가능", "color": "#4FACFE"}
 
     return {"buy": buy, "sell": sell, "ob": ob, "rsi": curr['RSI'], "regime": regime, "pyramiding": pyramiding}
 
 # ==========================================
-# 🖥️ 3. UI 구성 (V62.1 Full Spec Pro UI 유지)
+# 🖥️ 3. UI 구성 (사용자 요청 디자인 유지)
 # ==========================================
 with st.sidebar:
-    st.title("🛡️ V62.1 Full Spec Pro")
+    st.title("🛡️ Hybrid Pro V62.1")
     fg_val, fg_txt = get_fear_greed_index()
     st.metric("Fear & Greed", f"{fg_val}pts", fg_txt)
-    st.info("💡 수급 분석 엔진 가동 중")
+    st.info("💡 외인/기관 수급 분석 엔진 가동 중")
 
 tabs = st.tabs(["📊 대시보드", "💼 AI 리포트", "🔍 스캐너", "➕ 관리"])
 
 # --- [📊 대시보드] ---
 with tabs[0]:
-    portfolio = get_portfolio_gsheets() # load_portfolio 대신 통일된 이름 사용
+    portfolio = get_portfolio_gsheets() # NameError 해결
     if not portfolio.empty:
         total_buy, total_eval, dash_list = 0, 0, []
         for _, row in portfolio.iterrows():
@@ -149,9 +150,9 @@ with tabs[0]:
             st.plotly_chart(px.bar(df_dash, x='종목', y='수익', color='수익', template="plotly_dark"), use_container_width=True)
     else: st.info("관리 탭에서 종목을 먼저 등록하세요.")
 
-# --- [💼 AI 리포트] (기존 가로형 요약 UI) ---
+# --- [💼 AI 리포트] (사용자 선호 가로형 UI) ---
 with tabs[1]:
-    portfolio = get_portfolio_gsheets() # load_portfolio 대신 통일된 이름 사용
+    portfolio = get_portfolio_gsheets() # NameError 해결
     if not portfolio.empty:
         selected = st.selectbox("진단할 종목 선택", portfolio['Name'].unique())
         s_info = portfolio[portfolio['Name'] == selected].iloc[0]
@@ -159,7 +160,7 @@ with tabs[1]:
         if df_detail is not None:
             strat = get_strategy(df_detail, buy_price=float(s_info['Buy_Price']))
             
-            # 가로형 상단 요약 바
+            # 상단 가로 요약 바
             c1, c2, c3, c4 = st.columns([1,1,1,1])
             c1.metric("국면", strat['regime'])
             c2.metric("RSI", f"{strat['rsi']:.1f}")
@@ -170,7 +171,7 @@ with tabs[1]:
             st.markdown(f"""<div style="background:#1E1E1E; padding:20px; border-radius:10px; border-left:8px solid {py['color']}; margin-top:10px;">
                 <h3 style="margin:0; color:{py['color']};">{py['type']} 가이드</h3><p>{py['msg']}</p></div>""", unsafe_allow_html=True)
             
-            # 2단 타점 레이아웃
+            # 2단 타점 박스 레이아웃
             col_buy, col_sell = st.columns(2)
             with col_buy:
                 st.markdown(f"""<div style="background:#1B2635; padding:20px; border-radius:10px; height:160px;">
@@ -185,12 +186,12 @@ with tabs[1]:
             fig.add_hline(y=strat['ob'], line_dash="dash", line_color="yellow", annotation_text="산부인과(OB)")
             st.plotly_chart(fig, use_container_width=True)
 
-# --- [🔍 스캐너] (기존 카드 디자인 유지) ---
+# --- [🔍 스캐너] (기존 깔끔한 카드 디자인) ---
 with tabs[2]:
-    if st.button("🚀 신뢰도순 전수 조사 시작"):
+    if st.button("🚀 수급/신뢰도순 전수 조사 시작"):
         stocks = get_krx_list().head(50)
         found = []
-        with st.spinner("수급 및 신뢰도 분석 중..."):
+        with st.spinner("수급 및 신뢰도 정밀 분석 중..."):
             for _, r in stocks.iterrows():
                 df_s = get_hybrid_indicators(fetch_stock_smart(r['Code']))
                 if df_s is not None and df_s.iloc[-1]['RSI'] < 55:
@@ -210,7 +211,7 @@ with tabs[2]:
 
 # --- [➕ 관리] ---
 with tabs[3]:
-    st.subheader("📌 구글 시트 데이터 관리")
+    st.subheader("📌 종목 관리 (구글 시트 연동)")
     df_p = get_portfolio_gsheets()
     with st.form("add"):
         c1, c2, c3 = st.columns(3)
