@@ -2,61 +2,44 @@ import streamlit as st
 import pandas as pd
 import FinanceDataReader as fdr
 import yfinance as yf
-import datetime, os, time, requests, random
+import datetime, time, requests, os
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from streamlit_gsheets import GSheetsConnection  # 구글 시트 연결 추가
+from streamlit_gsheets import GSheetsConnection
 
 # ==========================================
 # ⚙️ 1. 시스템 설정 및 구글 시트 연동
 # ==========================================
-st.set_page_config(page_title="주식 비서 V62.1 Full Spec Pro", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="주식 비서 V63 Cloud Pro", page_icon="🌐", layout="wide")
 
-# 구글 시트 연결 함수 (데이터 로드 및 저장)
-def get_portfolio_gsheets():
+# 구글 시트 커넥션 (secrets.toml 설정 필요)
+def get_db():
+    conn = st.connection("gsheets", type=GSheetsConnection)
+    return conn
+
+def load_portfolio():
+    conn = get_db()
     try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        # 캐시를 사용하지 않고 실시간으로 읽기 (ttl=0)
-        df = conn.read(ttl=0)
-        return df.dropna(how='all') if df is not None else pd.DataFrame(columns=['Code', 'Name', 'Buy_Price', 'Qty'])
-    except Exception as e:
-        st.error(f"구글 시트 연결 오류: {e}")
+        # 데이터가 없을 경우를 대비해 기본 스키마 유지
+        df = conn.read(ttl=5) # 5초 캐시로 실시간성 확보
+        return df.dropna(subset=['Code'])
+    except:
         return pd.DataFrame(columns=['Code', 'Name', 'Buy_Price', 'Qty'])
 
-def save_portfolio_gsheets(df):
-    try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        conn.update(data=df)
-        st.success("구글 시트에 동기화되었습니다!")
-    except Exception as e:
-        st.error(f"구글 시트 저장 실패: {e}")
+def save_portfolio(df):
+    conn = get_db()
+    conn.update(data=df)
+    st.cache_data.clear()
 
-def send_telegram_msg(token, chat_id, message):
-    if token and chat_id:
-        try:
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
-            payload = {"chat_id": chat_id, "text": message, "parse_mode": "HTML"}
-            requests.post(url, json=payload, timeout=5)
-        except Exception as e:
-            st.error(f"텔레그램 전송 실패: {e}")
-
+# ==========================================
+# 🧠 2. 분석 엔진 (핵심 로직)
+# ==========================================
 @st.cache_data(ttl=3600)
 def get_krx_list(): 
     return fdr.StockListing('KRX')
 
-@st.cache_data(ttl=600)
-def get_fear_greed_index():
-    try:
-        url = "https://production.dataviz.cnn.io/index/feargreed/static/data"
-        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=2)
-        return r.json()['now']['value'], r.json()['now']['value_text']
-    except: return 50, "Neutral"
-
-# ==========================================
-# 🧠 2. 분석 엔진 (기존 로직 유지)
-# ==========================================
 def fetch_stock_smart(code, days=1100):
     code_str = str(code).zfill(6)
     start_date = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime('%Y-%m-%d')
@@ -94,6 +77,7 @@ def get_hybrid_indicators(df):
     hi_1y, lo_1y = df.tail(252)['High'].max(), df.tail(252)['Low'].min()
     range_1y = hi_1y - lo_1y
     df['Fibo_382'] = hi_1y - (range_1y * 0.382)
+    df['Fibo_500'] = hi_1y - (range_1y * 0.500)
     df['Fibo_618'] = hi_1y - (range_1y * 0.618)
     
     slope = (df['MA120'].iloc[-1] - df['MA120'].iloc[-20]) / df['MA120'].iloc[-20] * 100
@@ -102,9 +86,8 @@ def get_hybrid_indicators(df):
 
 def calculate_organic_strategy(df, buy_price=0):
     if df is None: return None
-    curr = df.iloc[-1]
-    cp, atr, ob = curr['Close'], curr['ATR'], curr['OB_Price']
-    f382, f618 = curr['Fibo_382'], curr['Fibo_618']
+    curr = df.iloc[-1]; cp, atr, ob = curr['Close'], curr['ATR'], curr['OB_Price']
+    f382, f500, f618 = curr['Fibo_382'], curr['Fibo_500'], curr['Fibo_618']
     
     def adj(p):
         t = 1 if p<2000 else 5 if p<5000 else 10 if p<20000 else 50 if p<50000 else 100 if p<200000 else 500 if p<500000 else 1000
@@ -112,131 +95,120 @@ def calculate_organic_strategy(df, buy_price=0):
 
     regime = df['Regime'].iloc[-1]
     if regime == "🚀 상승":
-        buy = [adj(cp - atr*1.1), adj(ob), adj(f382)]
+        buy = [adj(cp - atr*1.1), adj(ob), adj(f500)]
         sell = [adj(cp + atr*2.5), adj(cp + atr*4.5), adj(df.tail(252)['High'].max() * 1.1)]
     elif regime == "📉 하락":
         buy = [adj(f618), adj(df.tail(252)['Low'].min()), adj(df.tail(252)['Low'].min() - atr)]
-        sell = [adj(ob), adj(df['MA120'].iloc[-1]), adj(f382)]
+        sell = [adj(f500), adj(ob), adj(df['MA120'].iloc[-1])]
     else:
-        buy = [adj(ob), adj(f618), adj(f382)]
+        buy = [adj(f500), adj(ob), adj(f618)]
         sell = [adj(f382), adj(df.tail(252)['High'].max()), adj(df.tail(252)['High'].max() + atr)]
 
-    pyramiding = {"type": "💤 관망", "msg": "현재 대응 구간이 아닙니다.", "color": "#777"}
+    pyramiding = {"type": "💤 관망", "msg": "신규 진입 구간 대기", "color": "#777"}
     if buy_price > 0:
         yield_pct = (cp - buy_price) / buy_price * 100
         if yield_pct < -5:
-            target = min(buy)
-            pyramiding = {"type": "💧 물타기", "msg": f"{yield_pct:.1f}% 손실. {target:,}원 부근 비중 확대 권장", "color": "#FF4B4B"}
+            pyramiding = {"type": "💧 물타기", "msg": f"{yield_pct:.1f}% 손실. {min(buy):,}원 비중 확대", "color": "#FF4B4B"}
         elif yield_pct > 7 and regime == "🚀 상승":
-            target = adj(cp + atr * 0.5)
-            pyramiding = {"type": "🔥 불타기", "msg": f"{yield_pct:.1f}% 수익. {target:,}원 돌파 시 추가 매수 가능", "color": "#4FACFE"}
+            pyramiding = {"type": "🔥 불타기", "msg": f"수익률 {yield_pct:.1f}%. 추세 강화 중", "color": "#4FACFE"}
 
-    return {
-        "buy": buy, "sell": sell, "stop": adj(min(buy) * 0.93),
-        "regime": regime, "ob": ob, "rsi": curr['RSI'], "pyramiding": pyramiding
-    }
+    return {"buy": buy, "sell": sell, "stop": adj(min(buy)*0.93), "regime": regime, "ob": ob, "rsi": curr['RSI'], "pyramiding": pyramiding}
 
 # ==========================================
-# 🖥️ 3. UI 구성 (구글 시트 적용)
+# 🖥️ 3. UI 레이아웃
 # ==========================================
 with st.sidebar:
-    st.title("🛡️ Hybrid Pro V62.1")
-    fg_val, fg_txt = get_fear_greed_index()
-    st.metric("Fear & Greed", f"{fg_val}pts", fg_txt)
+    st.title("🛡️ Cloud V63 Pro")
+    st.caption("Google Sheets 연동 모드")
     st.divider()
-    tg_token = st.text_input("Bot Token", type="password")
-    tg_id = st.text_input("Chat ID")
+    tg_token = st.text_input("Telegram Token", type="password")
+    tg_id = st.text_input("Telegram ID")
+    auto_refresh = st.checkbox("자동 갱신")
+    refresh_int = st.slider("분 단위", 1, 60, 10)
 
-tabs = st.tabs(["📊 대시보드", "💼 AI 리포트", "🔍 스캐너", "📈 백테스트", "➕ 관리"])
+tabs = st.tabs(["📊 대시보드", "💼 AI 리포트", "🔍 스캐너", "📈 백테스트", "⚙️ 데이터 관리"])
 
-# --- [📊 대시보드] ---
+# --- [📊 탭 0: 대시보드] ---
 with tabs[0]:
-    portfolio = get_portfolio_gsheets()
+    portfolio = load_portfolio()
     if not portfolio.empty:
-        total_buy, total_eval, dash_list = 0, 0, []
-        for _, row in portfolio.iterrows():
-            df = fetch_stock_smart(row['Code'], days=10)
-            if df is not None and not df.empty:
-                cp = float(df.iloc[-1]['Close'])
-                b_total = float(row['Buy_Price']) * float(row['Qty'])
-                e_total = cp * float(row['Qty'])
-                total_buy += b_total; total_eval += e_total
-                dash_list.append({"종목": row['Name'], "수익": e_total - b_total, "평가액": e_total})
+        total_buy, total_eval, dash_data = 0, 0, []
+        with st.spinner('실시간 데이터 동기화...'):
+            for _, row in portfolio.iterrows():
+                df = fetch_stock_smart(row['Code'], days=10)
+                if df is not None:
+                    cp = float(df.iloc[-1]['Close'])
+                    b_total = row['Buy_Price'] * row['Qty']; e_total = cp * row['Qty']
+                    total_buy += b_total; total_eval += e_total
+                    dash_data.append({"종목": row['Name'], "수익": e_total - b_total, "평가액": e_total})
         
-        if dash_list:
-            df_dash = pd.DataFrame(dash_list)
-            c1, c2, c3 = st.columns(3)
-            c1.metric("총 매수액", f"{int(total_buy):,}원")
-            c2.metric("총 평가액", f"{int(total_eval):,}원", f"{((total_eval-total_buy)/total_buy*100 if total_buy>0 else 0):+.2f}%")
-            c3.metric("평가손익", f"{int(total_eval-total_buy):,}원")
-            st.plotly_chart(px.bar(df_dash, x='종목', y='수익', color='수익', template="plotly_dark"), use_container_width=True)
-    else: st.info("관리 탭에서 구글 시트에 종목을 먼저 등록하세요.")
-
-# --- [💼 AI 리포트] ---
-with tabs[1]:
-    portfolio = get_portfolio_gsheets()
-    if not portfolio.empty:
-        selected = st.selectbox("진단 종목", portfolio['Name'].unique())
-        s_info = portfolio[portfolio['Name'] == selected].iloc[0]
-        df_detail = get_hybrid_indicators(fetch_stock_smart(s_info['Code']))
-        if df_detail is not None:
-            strat = calculate_organic_strategy(df_detail, buy_price=float(s_info['Buy_Price']))
-            py = strat['pyramiding']
-            st.markdown(f"""<div style="background:#1E1E1E; padding:15px; border-radius:10px; border-left:8px solid {py['color']};">
-                <h3 style="margin:0; color:{py['color']};">{py['type']} 가이드</h3>
-                <p>{py['msg']}</p></div>""", unsafe_allow_html=True)
-            
-            c1, c2 = st.columns(2)
-            c1.info(f"🔵 **매수 타점**\n\n1차: {strat['buy'][0]:,}원\n\n2차: {strat['buy'][1]:,}원")
-            c2.success(f"🔴 **매도 목표**\n\n1차: {strat['sell'][0]:,}원\n\n2차: {strat['sell'][1]:,}원")
-
-# --- [🔍 스캐너] ---
-with tabs[2]:
-    if st.button("🚀 신뢰도순 전수 조사"):
-        stocks = get_krx_list()
-        targets = stocks[stocks['Marcap'] >= 500000000000].sort_values(by='Marcap', ascending=False).head(50)
-        found = []
-        with ThreadPoolExecutor(max_workers=5) as exec:
-            futures = {exec.submit(get_hybrid_indicators, fetch_stock_smart(r['Code'])): r['Name'] for _, r in targets.iterrows()}
-            for f in as_completed(futures):
-                name = futures[f]; df_scan = f.result()
-                if df_scan is not None and df_scan.iloc[-1]['RSI'] < 48:
-                    s = calculate_organic_strategy(df_scan)
-                    cp = df_scan.iloc[-1]['Close']
-                    score = (100 - s['rsi']) + (((s['sell'][0]-cp)/cp)*150)
-                    found.append({"name": name, "cp": cp, "strat": s, "score": score})
-        
-        found = sorted(found, key=lambda x: x['score'], reverse=True)
-        for idx, d in enumerate(found):
-            icon = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else "🔹"
-            st.markdown(f"""<div style="background:#1E1E1E; padding:20px; border-radius:15px; border-left:10px solid #4FACFE; margin-bottom:15px;">
-                <h3>{icon} {d['name']} <small>(점수: {d['score']:.1f})</small></h3>
-                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px; font-family:monospace;">
-                    <div><b>🔵 매수타점</b><br>1차: {d['strat']['buy'][0]:>8,}원<br>2차: {d['strat']['buy'][1]:>8,}원</div>
-                    <div><b>🔴 매도목표</b><br>1차: {d['strat']['sell'][0]:>8,}원<br>2차: {d['strat']['sell'][1]:>8,}원</div>
-                </div></div>""", unsafe_allow_html=True)
-
-# --- [➕ 관리] ---
-with tabs[4]:
-    st.subheader("📌 구글 시트 데이터 관리")
-    df_p = get_portfolio_gsheets()
-    
-    with st.form("add_stock"):
         c1, c2, c3 = st.columns(3)
-        n = c1.text_input("종목명")
-        p = c2.number_input("평단가", 0)
-        q = c3.number_input("수량", 0)
-        if st.form_submit_button("시트에 추가 및 저장"):
-            match = get_krx_list()[get_krx_list()['Name'] == n]
-            if not match.empty:
-                new_row = pd.DataFrame([[match.iloc[0]['Code'], n, p, q]], columns=['Code','Name','Buy_Price','Qty'])
-                df_p = pd.concat([df_p, new_row], ignore_index=True)
-                save_portfolio_gsheets(df_p)
-                st.rerun()
+        c1.metric("총 매수", f"{int(total_buy):,}원")
+        c2.metric("총 평가", f"{int(total_eval):,}원", f"{(total_eval-total_buy)/total_buy*100 if total_buy>0 else 0:+.2f}%")
+        c3.metric("실손익", f"{int(total_eval-total_buy):,}원")
+        
+        col1, col2 = st.columns(2)
+        df_plot = pd.DataFrame(dash_data)
+        col1.plotly_chart(px.bar(df_plot, x='종목', y='수익', color='수익', title="종목별 성과"), use_container_width=True)
+        col2.plotly_chart(px.pie(df_plot, values='평가액', names='종목', hole=0.4, title="자산 분배"), use_container_width=True)
+    else:
+        st.info("데이터 관리 탭에서 종목을 추가하세요.")
+
+# --- [🔍 탭 2: 스캐너] ---
+with tabs[2]:
+    st.header("🔍 마켓 스캔 (시총 상위 50)")
+    if st.button("AI 분석 시작"):
+        krx = get_krx_list()
+        targets = krx[krx['Marcap'] >= 500000000000].sort_values('Marcap', ascending=False).head(50)
+        found = []
+        bar = st.progress(0)
+        with ThreadPoolExecutor(max_workers=15) as ex:
+            futs = {ex.submit(get_hybrid_indicators, fetch_stock_smart(r['Code'])): r['Name'] for _, r in targets.iterrows()}
+            for i, f in enumerate(as_completed(futs)):
+                name = futs[f]; df_s = f.result()
+                if df_s is not None and df_s.iloc[-1]['RSI'] < 50:
+                    res = calculate_organic_strategy(df_s)
+                    upside = (res['sell'][0] - df_s.iloc[-1]['Close']) / df_s.iloc[-1]['Close'] * 100
+                    found.append({"name": name, "cp": df_s.iloc[-1]['Close'], "strat": res, "score": (100-res['rsi']) + upside})
+                bar.progress((i+1)/50)
+        
+        for d in sorted(found, key=lambda x: x['score'], reverse=True)[:10]:
+            st.markdown(f"""<div style="background:#1E1E1E; padding:15px; border-radius:10px; border-left:5px solid #4FACFE; margin-bottom:10px;">
+                <h4>{d['name']} (점수: {d['score']:.1f})</h4>
+                <p>현재가: {int(d['cp']):,}원 | RSI: {d['strat']['rsi']:.1f} | 국면: {d['strat']['regime']}</p>
+                <b>매수: {d['strat']['buy'][0]:,}원 / 매도: {d['strat']['sell'][0]:,}원</b></div>""", unsafe_allow_html=True)
+
+# --- [⚙️ 탭 4: 데이터 관리 (핵심)] ---
+with tabs[4]:
+    st.header("⚙️ 구글 시트 데이터 제어")
+    portfolio = load_portfolio()
     
-    if not df_p.empty:
-        st.write("현재 구글 시트 저장 데이터")
-        st.dataframe(df_p, use_container_width=True)
-        if st.button("시트 전체 초기화"):
-            save_portfolio_gsheets(pd.DataFrame(columns=['Code', 'Name', 'Buy_Price', 'Qty']))
-            st.rerun()
+    col_add, col_del = st.columns(2)
+    with col_add:
+        st.subheader("➕ 종목 추가")
+        with st.form("add_stock", clear_on_submit=True):
+            name = st.text_input("종목명")
+            price = st.number_input("평단가", min_value=0)
+            qty = st.number_input("수량", min_value=0)
+            if st.form_submit_button("시트에 저장"):
+                krx = get_krx_list()
+                match = krx[krx['Name'] == name]
+                if not match.empty:
+                    new_row = pd.DataFrame([{'Code': match.iloc[0]['Code'], 'Name': name, 'Buy_Price': price, 'Qty': qty}])
+                    save_portfolio(pd.concat([portfolio, new_row], ignore_index=True))
+                    st.success(f"{name} 추가 완료!"); st.rerun()
+    
+    with col_del:
+        st.subheader("🗑️ 종목 삭제")
+        if not portfolio.empty:
+            target = st.selectbox("삭제 대상", portfolio['Name'].tolist())
+            if st.button("즉시 삭제"):
+                save_portfolio(portfolio[portfolio['Name'] != target])
+                st.warning(f"{target} 삭제됨"); st.rerun()
+
+    st.divider()
+    st.subheader("📋 현재 구글 시트 원본 데이터")
+    st.dataframe(portfolio, use_container_width=True)
+
+if auto_refresh:
+    time.sleep(refresh_int * 60); st.rerun()
