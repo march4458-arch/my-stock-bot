@@ -1,8 +1,8 @@
-yfinance
+streamlit>=1.28.0
 pandas
-pandas-ta
-scikit-learn
-plotly
-streamlit
+numpy
 FinanceDataReader
+yfinance
+plotly
 requests
+st-gsheets-connection==0.0.3
