@@ -1,313 +1,99 @@
 import streamlit as st
-import pandas as pd
-import FinanceDataReader as fdr
 import yfinance as yf
-import datetime, os, time, requests
-from datetime import timezone, timedelta
-import numpy as np
-import plotly.express as px
+import pandas as pd
+import pandas_ta as ta
 import plotly.graph_objects as go
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from streamlit_gsheets import GSheetsConnection
+from sklearn.ensemble import RandomForestClassifier
+from datetime import datetime, timedelta
 
-# ==========================================
-# ⚙️ 1. 시스템 설정 및 KST 시간 함수
-# ==========================================
-def get_now_kst():
-    return datetime.datetime.now(timezone(timedelta(hours=9)))
+# 페이지 설정
+st.set_page_config(page_title="AI Alpha Trader", layout="wide")
 
-st.set_page_config(page_title="주식 비서 V65.0 Seamless Master", page_icon="🛡️", layout="wide")
+# --- 분석 함수 (캐싱 적용으로 속도 향상) ---
+@st.cache_data
+def get_stock_data(ticker):
+    df = yf.download(ticker, period="5y", interval="1d")
+    if df.empty: return None
+    
+    # 지표 계산
+    df['RSI'] = ta.rsi(df['Close'], length=14)
+    macd = ta.macd(df['Close'])
+    df = pd.concat([df, macd], axis=1)
+    
+    # 볼린저 밴드 (50, 0.5)
+    bb = ta.bbands(df['Close'], length=50, std=0.5)
+    df = pd.concat([df, bb], axis=1)
+    
+    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    df['Snow'] = ta.ema(df['Close'], length=20).diff()
+    
+    # 피보나치 (최근 1년)
+    high_1y = df['High'].iloc[-252:].max()
+    low_1y = df['Low'].iloc[-252:].min()
+    df['Fib_618'] = high_1y - ((high_1y - low_1y) * 0.618)
+    
+    return df.dropna()
 
-# 프리미엄 UI 디자인 CSS (V64.6~V64.9 완전 복구)
-st.markdown("""
-    <style>
-    .stApp { background-color: #f8f9fa; color: #333333; }
-    div[data-testid="stMetricValue"] { color: #007bff !important; font-weight: bold; }
-    .guide-box { padding: 25px; border-radius: 12px; margin-bottom: 25px; background-color: #ffffff; border: 1px solid #dee2e6; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
-    .scanner-card { padding: 22px; border-radius: 15px; border: 1px solid #ddd; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); background-color: white; }
-    .buy-box { background-color: #f0f7ff; padding: 12px; border-radius: 10px; border: 1px solid #b3d7ff; color: #0056b3; font-weight: bold; }
-    .sell-box { background-color: #fff5f5; padding: 12px; border-radius: 10px; border: 1px solid #ffcccc; color: #c82333; font-weight: bold; }
-    </style>
-    """, unsafe_allow_html=True)
+# --- 사이드바 설정 ---
+st.sidebar.title("🤖 AI 분석 설정")
+ticker = st.sidebar.text_input("종목 티커 입력 (예: 005930.KS, AAPL)", "005930.KS")
+analyze_btn = st.sidebar.button("분석 시작")
 
-# --- [유틸리티: 지능형 데이터 연동 패치] ---
-def send_telegram_msg(token, chat_id, message):
-    if token and chat_id and message:
-        try:
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
-            requests.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"}, timeout=5)
-        except: pass
+# --- 메인 대시보드 ---
+st.title(f"📈 {ticker} AI 전략 분석 리포트")
 
-def get_portfolio_gsheets():
-    """집/회사 어디서든 작동하는 하이브리드 인증 로직"""
-    try:
-        # 경로 무관 인증 시도
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(ttl="0")
+if analyze_btn:
+    df = get_stock_data(ticker)
+    
+    if df is not None:
+        # 1. AI 학습 및 예측
+        df_ml = df.copy()
+        df_ml['Target'] = (df_ml['Close'].shift(-5) > df_ml['Close'] * 1.03).astype(int)
+        features = ['RSI', 'MACD_12_26_9', 'Snow', 'ATR']
         
-        if df is None or df.empty:
-            return pd.DataFrame(columns=['Code', 'Name', 'Buy_Price', 'Qty'])
-
-        df = df.dropna(how='all')
-        df.columns = [str(c).strip().capitalize() for c in df.columns]
-        rename_map = {'Code': 'Code', '코드': 'Code', 'Name': 'Name', '종목명': 'Name', 
-                      'Buy_price': 'Buy_Price', '평단가': 'Buy_Price', 'Qty': 'Qty', '수량': 'Qty'}
-        df = df.rename(columns=rename_map)
-        for col in ['Buy_Price', 'Qty']:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        df['Code'] = df['Code'].astype(str).str.split('.').str[0].str.zfill(6)
-        return df[['Code', 'Name', 'Buy_Price', 'Qty']]
-    except Exception as e:
-        # 에러 발생 시 사용자에게 팁 제공
-        st.sidebar.error(f"⚠️ 구글 시트 연동 실패")
-        st.sidebar.info("💡 해결법: 아까 확인한 secrets.toml 파일을 현재 폴더의 .streamlit 폴더로 복사하세요.")
-        return pd.DataFrame(columns=['Code', 'Name', 'Buy_Price', 'Qty'])
-
-# ==========================================
-# 🧠 2. 하이브리드 분석 엔진 (Full Version)
-# ==========================================
-def fetch_stock_smart(code, days=1100):
-    """네트워크 지연을 고려한 2중 백업 로직"""
-    code_str = str(code).zfill(6)
-    start_date = (get_now_kst() - datetime.timedelta(days=days)).strftime('%Y-%m-%d')
-    try:
-        df = fdr.DataReader(code_str, start_date)
-        if df is not None and not df.empty: return df
-    except:
-        try:
-            ticker = f"{code_str}.KS" if int(code_str) < 900000 else f"{code_str}.KQ"
-            df = yf.download(ticker, start=start_date, progress=False, timeout=10)
-            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-            return df
-        except: return None
-
-def get_hybrid_indicators(df):
-    if df is None or len(df) < 120: return None
-    df = df.copy()
-    close = df['Close']
-    df['MA20'] = close.rolling(20).mean()
-    df['MA120'] = close.rolling(120).mean()
-    df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
-    delta = close.diff(); gain = (delta.where(delta > 0, 0)).rolling(14).mean(); loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    df['RSI'] = 100 - (100 / (1 + (gain / (loss + 1e-9)).fillna(0)))
-    
-    std = close.rolling(20).std()
-    df['BB_Upper'] = df['MA20'] + (std * 2)
-    df['BB_Lower'] = df['MA20'] - (std * 2)
-    
-    # 스토캐스틱 K/D 완전 복구
-    low_min, high_max = df['Low'].rolling(14).min(), df['High'].rolling(14).max()
-    df['Stoch_K'] = ((close - low_min) / (high_max - low_min + 1e-9)) * 100
-    df['Stoch_D'] = df['Stoch_K'].rolling(3).mean()
-    
-    avg_vol = df['Volume'].rolling(20).mean()
-    df['Vol_Zscore'] = (df['Volume'] - avg_vol) / (df['Volume'].rolling(20).std() + 1e-9)
-    
-    hi_1y, lo_1y = df.tail(252)['High'].max(), df.tail(252)['Low'].min()
-    df['Fibo_618'] = hi_1y - ((hi_1y - lo_1y) * 0.618)
-    
-    ob_zones = [df['Low'].iloc[i-1] for i in range(len(df)-40, len(df)-1) 
-                if df['Close'].iloc[i] > df['Open'].iloc[i] * 1.025 and df['Volume'].iloc[i] > avg_vol.iloc[i] * 1.5]
-    df['OB_Price'] = np.mean(ob_zones) if ob_zones else df['MA20'].iloc[-1]
-    
-    counts, edges = np.histogram(df.tail(20)['Close'], bins=10, weights=df.tail(20)['Volume'])
-    df['POC_Price'] = edges[np.argmax(counts)]
-    
-    df['Regime'] = "🚀 상승" if (df['MA120'].iloc[-1] - df['MA120'].iloc[-20]) / (df['MA120'].iloc[-20] + 1e-9) > 0.004 else "📉 하락"
-    return df
-
-def get_strategy(df, buy_price=0):
-    if df is None: return None
-    curr = df.iloc[-1]
-    cp, atr, ob, poc, f618, bbl, bbu = curr['Close'], curr['ATR'], curr['OB_Price'], curr['POC_Price'], curr['Fibo_618'], curr['BB_Lower'], curr['BB_Upper']
-    hi_120 = df.tail(120)['High'].max()
-    
-    def adj(p): return int(round(p/10)*10) if p<100000 else int(round(p/100)*100)
-    
-    # [유기적 타점 재배치]
-    candidates = [{"name": "매물대(POC)", "price": poc, "score": 0}, {"name": "피보나치(618)", "price": f618, "score": 0},
-                  {"name": "세력선(OB)", "price": ob, "score": 0}, {"name": "밴드하단(BB)", "price": bbl, "score": 0}]
-    for cand in candidates:
-        if curr['RSI'] < 35: cand['score'] += 20
-        if abs(cp - cand['price']) / (cp + 1e-9) < 0.03: cand['score'] += 30
-
-    sorted_cand = sorted(candidates, key=lambda x: x['score'], reverse=True)
-    buy = [adj(sorted_cand[0]['price']), adj(sorted_cand[1]['price']), adj(sorted_cand[2]['price'])]
-    buy_names = [sorted_cand[0]['name'], sorted_cand[1]['name'], sorted_cand[2]['name']]
-    
-    # 3분할 매도 (V64.5 스타일 유지)
-    sell = [adj(cp + atr * 2.0), adj(max(cp + atr * 3.5, hi_120)), adj(max(cp + atr * 5.0, hi_120 + atr * 2.0))]
-    
-    stop_loss = adj(min(buy) * 0.93)
-    pyramiding = {"type": "💤 관망", "msg": f"{buy_names[0]} 타점 대기", "color": "#6c757d", "alert": False}
-    if buy_price > 0:
-        y = (cp - buy_price) / (buy_price + 1e-9) * 100
-        if cp >= sell[0]: pyramiding = {"type": "💰 익절", "msg": f"수익률 {y:.1f}% 달성! 1차 익절 구간", "color": "#28a745", "alert": True}
-        elif cp <= stop_loss: pyramiding = {"type": "⚠️ 손절", "msg": "리스크 관리", "color": "#dc3545", "alert": True}
-        elif y < -5: pyramiding = {"type": "💧 물타기", "msg": f"{buy_names[0]} 지점 추매", "color": "#d63384", "alert": True}
-
-    return {"buy": buy, "buy_names": buy_names, "sell": sell, "stop": stop_loss, "regime": curr['Regime'], 
-            "pyramiding": pyramiding, "poc": poc, "ob": ob, "bbl": bbl, "bbu": bbu, "rsi": curr['RSI'], "stoch": curr['Stoch_K']}
-
-# ==========================================
-# 🖥️ 3. 메인 인터페이스 (Full UI 복구)
-# ==========================================
-with st.sidebar:
-    st.title("🛡️ Hybrid V65.0 Final")
-    tg_token = st.text_input("Telegram Bot Token", type="password")
-    tg_id = st.text_input("Telegram Chat ID")
-    st.markdown("---")
-    min_marcap_input = st.number_input("최소 시가총액 (억 원)", value=5000)
-    min_marcap = min_marcap_input * 100000000
-    alert_portfolio = st.checkbox("보유종목 실시간 감시", value=True)
-    alert_scanner = st.checkbox("스캐너 고득점 알림 발송", value=True)
-    st.markdown("---")
-    auto_refresh = st.checkbox("자동 새로고침", value=False)
-    interval = st.slider("새로고침 주기(분)", 1, 60, 10)
-
-shared_portfolio = get_portfolio_gsheets()
-tabs = st.tabs(["📊 대시보드", "💼 AI 리포트", "🔍 전략 스캐너", "📈 트리플 복리 백테스트", "➕ 관리"])
-
-# --- [📊 탭 0: 대시보드] ---
-with tabs[0]:
-    if not shared_portfolio.empty:
-        t_buy, t_eval, dash_list, port_alert_msg, has_alert = 0.0, 0.0, [], "🚨 <b>포트폴리오 긴급 신호</b>\n\n", False
-        for _, row in shared_portfolio.iterrows():
-            df = fetch_stock_smart(row['Code'], days=200)
-            idx_df = get_hybrid_indicators(df)
-            if idx_df is not None:
-                st_res = get_strategy(idx_df, row['Buy_Price'])
-                cp = float(idx_df['Close'].iloc[-1])
-                t_buy += (row['Buy_Price'] * row['Qty']); t_eval += (cp * row['Qty'])
-                dash_list.append({"종목": row['Name'], "수익": (cp-row['Buy_Price'])*row['Qty'], "상태": st_res['pyramiding']['type']})
-                if alert_portfolio and st_res['pyramiding']['alert']:
-                    has_alert = True
-                    port_alert_msg += f"<b>[{st_res['pyramiding']['type']}]</b> {row['Name']}\n{st_res['pyramiding']['msg']}\n\n"
+        X = df_ml[features][:-5]
+        y = df_ml['Target'][:-5]
         
-        c1, c2, c3 = st.columns(3)
-        c1.metric("총 매수", f"{int(t_buy):,}원")
-        c2.metric("총 평가", f"{int(t_eval):,}원", f"{(t_eval-t_buy)/(t_buy+1e-9)*100:+.2f}%")
-        c3.metric("손익", f"{int(t_eval-t_buy):,}원")
-        if dash_list: st.plotly_chart(px.bar(pd.DataFrame(dash_list), x='종목', y='수익', color='상태', template="plotly_dark"), use_container_width=True)
-        if has_alert: send_telegram_msg(tg_token, tg_id, port_alert_msg)
-    else: st.info("➕ 관리 탭에서 종목을 먼저 등록하세요.")
+        model = RandomForestClassifier(n_estimators=100)
+        model.fit(X, y)
+        prob = model.predict_proba(df_ml[features].iloc[[-1]])[0][1]
 
-# --- [💼 탭 1: AI 리포트] ---
-with tabs[1]:
-    if not shared_portfolio.empty:
-        selected_name = st.selectbox("진단할 종목 선택", shared_portfolio['Name'].tolist())
-        row = shared_portfolio[shared_portfolio['Name'] == selected_name].iloc[0]
-        with st.spinner(f"{selected_name} 정밀 분석 중..."):
-            df_ai = get_hybrid_indicators(fetch_stock_smart(row['Code']))
-            if df_ai is not None:
-                st_res = get_strategy(df_ai, row['Buy_Price'])
-                py = st_res['pyramiding']
-                st.markdown(f'<div class="guide-box" style="border-left:10px solid {py["color"]};"><h2>{py["type"]}</h2><p>{py["msg"]}</p></div>', unsafe_allow_html=True)
-                
-                col_b, col_s = st.columns(2)
-                with col_b: st.markdown(f'<div class="buy-box">🔵 유기적 3분할 매수<br>1차({st_res["buy_names"][0]}): {st_res["buy"][0]:,}원<br>2차: {st_res["buy"][1]:,}원<br>3차: {st_res["buy"][2]:,}원</div>', unsafe_allow_html=True)
-                with col_s: st.markdown(f'<div class="sell-box">🔴 트리플 3분할 매도<br>1차: {st_res["sell"][0]:,}원<br>2차: {st_res["sell"][1]:,}원<br>3차: {st_res["sell"][2]:,}원</div>', unsafe_allow_html=True)
-                
-                
-                fig = go.Figure()
-                d_tail = df_ai.tail(120)
-                fig.add_trace(go.Candlestick(x=d_tail.index, open=d_tail['Open'], high=d_tail['High'], low=d_tail['Low'], close=d_tail['Close'], name="주가"))
-                fig.add_trace(go.Scatter(x=d_tail.index, y=d_tail['BB_Upper'], line=dict(color='rgba(173,216,230,0.4)'), name="BB상단"))
-                fig.add_trace(go.Scatter(x=d_tail.index, y=d_tail['BB_Lower'], line=dict(color='rgba(173,216,230,0.4)'), name="BB하단"))
-                fig.add_hline(y=st_res['poc'], line_width=2, line_color="green", annotation_text="POC")
-                fig.update_layout(height=600, template="plotly_white", xaxis_rangeslider_visible=False)
-                st.plotly_chart(fig, use_container_width=True)
-                
-                c1, c2, c3 = st.columns(3)
-                c1.metric("RSI 강도", f"{st_res['rsi']:.1f}"); c2.metric("Stoch 위치", f"{st_res['stoch']:.1f}"); c3.metric("트렌드", st_res['regime'])
-    else: st.warning("포트폴리오가 비어있습니다.")
-
-# --- [🔍 탭 2: 전략 스캐너 (15스레드 최적화)] ---
-with tabs[2]:
-    if st.button("🚀 초고속 유기적 전수조사 (Top 100)"):
-        krx = fdr.StockListing('KRX')
-        targets = krx[krx['Marcap'] >= min_marcap].sort_values('Marcap', ascending=False).head(100)
-        found, has_scan, scan_msg = [], False, "🔍 <b>V65.0 스캔 결과</b>\n\n"
-        prog_bar = st.progress(0)
+        # 2. 상단 요약 지표 (Metrics)
+        curr_price = float(df['Close'].iloc[-1])
+        atr = float(df['ATR'].iloc[-1])
         
-        with ThreadPoolExecutor(max_workers=15) as ex:
-            futs = {ex.submit(get_hybrid_indicators, fetch_stock_smart(r['Code'], days=300)): r['Name'] for _, r in targets.iterrows()}
-            for i, f in enumerate(as_completed(futs)):
-                res = f.result()
-                if res is not None:
-                    curr = res.iloc[-1]; st_res = get_strategy(res)
-                    sc = curr['Vol_Zscore'] * 15 + (25 if curr['RSI'] < 35 else 0) + (25 if abs(curr['Close']-curr['POC_Price'])/(curr['POC_Price']+1e-9) < 0.02 else 0)
-                    found.append({"name": futs[f], "score": sc, "regime": st_res['regime'], "strat": st_res})
-                prog_bar.progress((i + 1) / len(targets))
+        col1, col2, col3 = st.columns(3)
+        col1.metric("현재가", f"{curr_price:,.0f}원")
+        col2.metric("AI 상승 확률", f"{prob*100:.1f}%")
+        col3.metric("변동성(ATR)", f"{atr:,.1f}")
 
-        for idx, d in enumerate(sorted(found, key=lambda x: x['score'], reverse=True)[:10]):
-            acc_c = "#007bff" if d['regime'] == "🚀 상승" else "#dc3545"
-            st.markdown(f"""<div class="scanner-card" style="border-left: 8px solid {acc_c};">
-                <h3 style="margin:0; color:{acc_c};">{d['name']} <small>Score: {d['score']:.1f}</small></h3>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top:10px;">
-                    <div class="buy-box">🔵 유기적 매수 (30:30:40)<br>1차: {d['strat']['buy'][0]:,}원<br>2차: {d['strat']['buy'][1]:,}원</div>
-                    <div class="sell-box">🔴 트리플 매도 (30:30:40)<br>1차: {d['strat']['sell'][0]:,}원<br>2차: {d['strat']['sell'][1]:,}원</div>
-                </div>
-            </div>""", unsafe_allow_html=True)
-            if alert_scanner and idx < 3:
-                has_scan = True; scan_msg += f"🔥 <b>{d['name']}</b> ({d['score']:.1f}점)\n타점: {d['strat']['buy'][0]:,}원\n\n"
-        if has_scan: send_telegram_msg(tg_token, tg_id, scan_msg)
+        # 3. 차트 시각화 (Plotly)
+        fig = go.Figure()
+        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], 
+                                     low=df['Low'], close=df['Close'], name="캔들"))
+        fig.add_trace(go.Scatter(x=df.index, y=df['BBM_50_0.5'], line=dict(color='orange'), name="BB 중심"))
+        fig.update_layout(title=f"{ticker} 주가 차트", xaxis_rangeslider_visible=False, height=600)
+        st.plotly_chart(fig, use_container_width=True)
 
-# --- [📈 탭 3: 트리플 복리 백테스트] ---
-with tabs[3]:
-    
-    st.header("📈 3단계 분할 매매 복리 시뮬레이션")
-    bt_name = st.text_input("검증 종목명", "에코프로비엠")
-    init_seed = st.number_input("초기 자본", value=10000000)
-    
-    if st.button("📊 트리플 백테스트 시작"):
-        krx = fdr.StockListing('KRX'); match = krx[krx['Name'] == bt_name]
-        if not match.empty:
-            df_bt = get_hybrid_indicators(fetch_stock_smart(match.iloc[0]['Code'], days=730))
-            if df_bt is not None:
-                cash, stocks, in_pos, pos_size = init_seed, 0, False, 0
-                buy_levels, sell_levels, equity_curve = [], [], []
-                for i in range(120, len(df_bt)):
-                    curr = df_bt.iloc[i]; strat = get_strategy(df_bt.iloc[:i]); cp = curr['Close']
-                    if not in_pos:
-                        if curr['Low'] <= strat['buy'][0]:
-                            in_pos, buy_levels, sell_levels, pos_size = True, strat['buy'], strat['sell'], 0.3
-                            buy_amt = cash * 0.3; stocks = buy_amt / buy_levels[0]; cash -= buy_amt
-                    else:
-                        if pos_size == 0.3 and curr['Low'] <= buy_levels[1]:
-                            add_amt = (cash + (stocks*buy_levels[0])) / 0.7 * 0.3
-                            stocks += (add_amt / buy_levels[1]); cash -= add_amt; pos_size = 0.6
-                        elif pos_size == 0.6 and curr['Low'] <= buy_levels[2]:
-                            add_amt = cash; stocks += (add_amt / buy_levels[2]); cash -= add_amt; pos_size = 1.0
-                        if stocks > 0:
-                            if curr['High'] >= sell_levels[0] and pos_size >= 0.3:
-                                s_qty = stocks * 0.3; cash += (s_qty * sell_levels[0]); stocks -= s_qty
-                            if curr['High'] >= sell_levels[1] and stocks > 0:
-                                s_qty = stocks * 0.4; cash += (s_qty * sell_levels[1]); stocks -= s_qty
-                            if curr['High'] >= sell_levels[2] or curr['Low'] <= strat['stop']:
-                                cash += (stocks * cp); stocks = 0; in_pos = False; pos_size = 0
-                    equity_curve.append({'date': df_bt.index[i], 'total': cash + (stocks * cp)})
-                
-                edf = pd.DataFrame(equity_curve)
-                edf['peak'] = edf['total'].cummax()
-                edf['drawdown'] = (edf['total'] - edf['peak']) / (edf['peak'] + 1e-9) * 100
-                m1, m2, m3 = st.columns(3)
-                m1.metric("최종 자산", f"{int(edf['total'].iloc[-1]):,}원")
-                m2.metric("누적 수익", f"{(edf['total'].iloc[-1]-init_seed)/(init_seed+1e-9)*100:+.1f}%")
-                m3.metric("최대 낙폭(MDD)", f"{edf['drawdown'].min():.2f}%")
-                st.plotly_chart(px.line(edf, x='date', y='total', title="복리 자산 성장 곡선"), use_container_width=True)
+        # 4. 분석 결과 레이아웃
+        st.subheader("🛠 매매 전략 가이드")
+        left_col, right_col = st.columns(2)
+        
+        with left_col:
+            st.info("🎯 **매수 및 물타기 타점 (ATR 기반)**")
+            st.write(f"- **1차 진입:** {curr_price:,.0f}")
+            st.write(f"- **2차 물타기:** {curr_price - (atr * 1.5):,.0f}")
+            st.write(f"- **3차 물타기:** {curr_price - (atr * 3):,.0f}")
+            
+        with right_col:
+            st.warning("🔥 **매도 및 불타기 타점**")
+            st.write(f"- **1차 불타기:** {curr_price + (atr * 2):,.0f}")
+            st.write(f"- **최종 익절:** {curr_price + (atr * 4):,.0f}")
+            st.write(f"- **피보나치 지지(0.618):** {df['Fib_618'].iloc[-1]:,.0f}")
 
-# --- [➕ 탭 4: 관리] ---
-with tabs[4]:
-    df_p = shared_portfolio
-    with st.form("add_stock"):
-        c1, c2, c3 = st.columns(3); n, p, q = c1.text_input("종목명"), c2.number_input("평단가"), c3.number_input("수량")
-        if st.form_submit_button("등록"):
-            match = fdr.StockListing('KRX')[fdr.StockListing('KRX')['Name'] == n]
-            if not match.empty:
-                new_row = pd.DataFrame([[match.iloc[0]['Code'], n, p, q]], columns=['Code', 'Name', 'Buy_Price', 'Qty'])
-                st.connection("gsheets", type=GSheetsConnection).update(data=pd.concat([df_p, new_row]))
-                st.rerun()
-    st.dataframe(df_p, use_container_width=True)
+    else:
+        st.error("데이터를 불러오지 못했습니다. 티커를 확인해 주세요.")
 
-if auto_refresh: time.sleep(interval * 60); st.rerun()
+# 하단 정보
+st.markdown("---")
+st.caption("주의: 본 데이터는 AI 학습 결과이며 실제 투자 수익을 보장하지 않습니다.")
