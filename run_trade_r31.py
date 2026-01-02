@@ -14,7 +14,7 @@ from streamlit_gsheets import GSheetsConnection
 # ⚙️ 1. 시스템 설정 및 KST 시간 함수
 # ==========================================
 def get_now_kst():
-    """표준 공백을 사용한 KST 시간 반환 함수 (특수문자 제거됨)"""
+    """표준 공백을 사용하여 특수문자 에러를 방지한 KST 시간 함수"""
     return datetime.datetime.now(timezone(timedelta(hours=9)))
 
 st.set_page_config(page_title="주식 비서 V64.6 Final Master", page_icon="⚡", layout="wide")
@@ -39,7 +39,7 @@ def send_telegram_msg(token, chat_id, message):
         except: pass
 
 def get_portfolio_gsheets():
-    """구글 시트 연동 및 데이터 보정 함수"""
+    """구글 스프레드시트 연동 및 데이터 보정 (Secrets.toml 설정 필요)"""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = conn.read(ttl="0")
@@ -106,7 +106,9 @@ def get_hybrid_indicators(df):
     df['MA120'] = close.rolling(120).mean()
     df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
     
-    delta = close.diff(); gain = (delta.where(delta > 0, 0)).rolling(14).mean(); loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     df['RSI'] = 100 - (100 / (1 + (gain / (loss + 1e-9)).fillna(0)))
     
     hi_1y, lo_1y = df.tail(252)['High'].max(), df.tail(252)['Low'].min()
@@ -131,6 +133,7 @@ def get_strategy(df, buy_price=0):
         t = 1 if p<2000 else 5 if p<5000 else 10 if p<20000 else 50 if p<50000 else 100 if p<200000 else 500 if p<500000 else 1000
         return int(round(p/t)*t)
 
+    # 유기적 3분할 매수/매도 타점 산출
     buy = [adj(cp - atr * 1.1), adj(ob), adj(f618)]
     sell = [adj(cp + atr * 2.5), adj(cp + atr * 4.0), adj(df.tail(252)['High'].max() * 1.05)]
     stop = adj(min(buy) * 0.93)
@@ -145,20 +148,22 @@ def get_strategy(df, buy_price=0):
     return {"buy": buy, "sell": sell, "stop": stop, "regime": curr['Regime'], "rsi": curr['RSI'], "pyramiding": pyramiding}
 
 # ==========================================
-# 🖥️ 4. UI 탭 구현
+# 🖥️ 4. UI 및 탭 기능 구현
 # ==========================================
 with st.sidebar:
     st.title("🛡️ Hybrid Master V64.6")
-    tg_token = st.text_input("Telegram Token", type="password")
-    tg_id = st.text_input("Chat ID")
-    auto_refresh = st.checkbox("자동 갱신", value=False)
+    tg_token = st.text_input("Telegram Bot Token", type="password")
+    tg_id = st.text_input("Telegram Chat ID")
+    auto_refresh = st.checkbox("자동 새로고침", value=False)
     interval = st.slider("주기(분)", 1, 60, 10)
 
 tabs = st.tabs(["📊 대시보드", "💼 AI 리포트", "🔍 스캐너", "📈 적중 분석", "➕ 관리"])
 
-with tabs[2]: # 스캐너 탭
+with tabs[2]: # 전략 스캐너 탭
+    st.header("🔍 유기적 타점 발굴 스캐너")
     if st.button("🚀 전 종목 유기적 스캔 가동"):
         stocks = get_krx_list()
+        # 시총 5,000억 이상의 우량주 50개 우선 분석
         targets = stocks[stocks['Marcap'] >= 500000000000].sort_values('Marcap', ascending=False).head(50)
         found, prog = [], st.progress(0)
         
@@ -172,12 +177,48 @@ with tabs[2]: # 스캐너 탭
                 prog.progress((i + 1) / len(targets))
         
         for d in found:
-            st.markdown(f"""<div class="scanner-card">
-                <h3>{d['name']} <small>{d['strat']['regime']}</small></h3>
-                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
-                    <div class="buy-box"><b>🔵 매수 타점</b><br>1차: {d['strat']['buy'][0]:,}<br>2차: {d['strat']['buy'][1]:,}</div>
-                    <div class="sell-box"><b>🔴 매도 목표</b><br>1차: {d['strat']['sell'][0]:,}<br>2차: {d['strat']['sell'][1]:,}</div>
+            acc_c = "#007bff" if d['strat']['regime'] == "🚀 상승" else "#dc3545"
+            st.markdown(f"""<div class="scanner-card" style="border-left: 8px solid {acc_c};">
+                <h3 style="margin:0; color:{acc_c};">{d['name']} <small>{d['strat']['regime']}</small></h3>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:10px;">
+                    <div class="buy-box"><b>🔵 3분할 매수</b><br>1차: {d['strat']['buy'][0]:,}원<br>2차(OB): {d['strat']['buy'][1]:,}원</div>
+                    <div class="sell-box"><b>🔴 3분할 매도</b><br>1차: {d['strat']['sell'][0]:,}원<br>2차: {d['strat']['sell'][1]:,}원</div>
                 </div>
             </div>""", unsafe_allow_html=True)
 
-# [이하 대시보드 및 백테스트 로직은 V64.5와 동일하게 통합]
+# 
+
+with tabs[3]: # 실전 적중 분석 탭
+    st.header("📈 로직 실전 적중 추적기")
+    bt_name = st.text_input("분석 종목명", "삼성전자")
+    if st.button("📊 추적 시작"):
+        stocks = get_krx_list()
+        match = stocks[stocks['Name'] == bt_name]
+        if not match.empty:
+            df_bt = fetch_stock_smart(match.iloc[0]['Code'], days=500)
+            if df_bt is not None:
+                hits = []
+                for i in range(150, len(df_bt)-5):
+                    sub = df_bt.iloc[:i]
+                    ind = get_hybrid_indicators(sub)
+                    if ind is not None and ind.iloc[-1]['RSI'] < 46:
+                        strat = get_strategy(ind)
+                        # 타점 도달 여부 확인
+                        if df_bt['Low'].iloc[i] <= strat['buy'][0]:
+                            post = df_bt.loc[df_bt.index[i]:].head(22)
+                            res = "익절성공" if post['High'].max() >= strat['sell'][0] else "손절발생" if post['Low'].min() <= strat['stop'] else "진행중"
+                            hits.append({"날짜": df_bt.index[i], "타점": strat['buy'][0], "결과": res})
+                if hits:
+                    hdf = pd.DataFrame(hits)
+                    st.metric("로직 승률", f"{(hdf['결과']=='익절성공').sum()/len(hdf)*100:.1f}%")
+                    fig_t = go.Figure()
+                    fig_t.add_trace(go.Scatter(x=df_bt.index, y=df_bt['Close'], name="주가", line=dict(color='gray', width=1), opacity=0.4))
+                    for h in hits:
+                        color = "lime" if h['결과']=="익절성공" else "red" if h['결과']=="손절발생" else "yellow"
+                        fig_t.add_trace(go.Scatter(x=[h['날짜']], y=[h['타점']], mode='markers', marker=dict(color=color, size=10, symbol='triangle-up'), name=h['결과']))
+                    st.plotly_chart(fig_t, use_container_width=True)
+                else: st.warning("분석 기간 내 타점이 포착되지 않았습니다.")
+
+if auto_refresh:
+    time.sleep(interval * 60)
+    st.rerun()
