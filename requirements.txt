@@ -6,3 +6,6 @@ numpy
 plotly
 requests
 st-gsheets-connection
+scikit-learn
+pandas
+numpy
