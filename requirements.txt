@@ -1,7 +1,0 @@
-streamlit
-pandas
-numpy
-finance-datareader
-yfinance
-plotly
-requests
