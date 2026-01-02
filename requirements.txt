@@ -1,7 +1,7 @@
 streamlit
-pandas
-numpy
 finance-datareader
 yfinance
+pandas
+numpy
 plotly
 requests
