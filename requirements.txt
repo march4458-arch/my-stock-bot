@@ -1,8 +1,6 @@
-streamlit
-pandas
-finance-datareader
 yfinance
-numpy
+pandas
+pandas-ta
+scikit-learn
 plotly
-requests
-st-gsheets-connection
+streamlit
