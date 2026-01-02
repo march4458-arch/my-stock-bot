@@ -4,6 +4,7 @@ import FinanceDataReader as fdr
 import yfinance as yf
 import datetime, os, time, requests
 import numpy as np
+import pytz  # 한국 시간 설정을 위해 추가
 import plotly.express as px
 import plotly.graph_objects as go
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,6 +14,13 @@ from streamlit_gsheets import GSheetsConnection
 # ⚙️ 1. 시스템 설정 및 라이트 테마 CSS
 # ==========================================
 st.set_page_config(page_title="주식 비서 V62.1 Hybrid Full Spec", page_icon="⚡", layout="wide")
+
+# 타임존 설정
+KST = pytz.timezone('Asia/Seoul')
+
+def get_now_kst():
+    """현재 한국 시간을 반환"""
+    return datetime.datetime.now(KST)
 
 st.markdown("""
     <style>
@@ -34,15 +42,17 @@ def get_krx_list():
     return fdr.StockListing('KRX')
 
 def get_market_status():
-    now = datetime.datetime.now()
+    now = get_now_kst()
     if now.weekday() >= 5: return False, "주말 휴장 😴"
-    start = now.replace(hour=9, minute=0, second=0)
-    end = now.replace(hour=15, minute=30, second=0)
+    # 한국 시간 기준 장 시간 설정
+    start = now.replace(hour=9, minute=0, second=0, microsecond=0)
+    end = now.replace(hour=15, minute=30, second=0, microsecond=0)
     if start <= now <= end: return True, "정규장 운영 중 🚀"
     return False, "장외 시간 🌙"
 
 def is_report_time():
-    now = datetime.datetime.now()
+    now = get_now_kst()
+    # 한국 시간 18:00 ~ 18:10 사이인지 확인
     return now.hour == 18 and 0 <= now.minute <= 10
 
 # --- [데이터 연동 함수] ---
@@ -88,10 +98,11 @@ def get_fear_greed_index():
 # ==========================================
 # 🧠 2. 고도화된 분석 엔진
 # ==========================================
-@st.cache_data(ttl=300) # 분석 속도 향상을 위한 캐싱
+@st.cache_data(ttl=300) 
 def fetch_stock_smart(code, days=1100):
     code_str = str(code).zfill(6)
-    start_date = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime('%Y-%m-%d')
+    # 데이터 조회 시작점도 한국 시간 기준으로 계산
+    start_date = (get_now_kst() - datetime.timedelta(days=days)).strftime('%Y-%m-%d')
     try:
         df = fdr.DataReader(code_str, start_date)
         if df is not None and not df.empty: return df
@@ -116,21 +127,18 @@ def get_hybrid_indicators(df):
     avg_vol = df['Volume'].rolling(20).mean()
     df['Vol_Zscore'] = (df['Volume'] - avg_vol) / (df['Volume'].rolling(20).std() + 1e-9)
     
-    # OB(Order Block) 계산
     ob_zones = []
     for i in range(len(df)-40, len(df)-1):
         if df['Close'].iloc[i] > df['Open'].iloc[i] * 1.025 and df['Volume'].iloc[i] > avg_vol.iloc[i] * 1.5:
             ob_zones.append(df['Low'].iloc[i-1])
     df['OB_Price'] = np.mean(ob_zones) if ob_zones else df['MA120'].iloc[-1]
     
-    # 피보나치
     hi_1y, lo_1y = df.tail(252)['High'].max(), df.tail(252)['Low'].min()
     range_1y = hi_1y - lo_1y
     df['Fibo_382'] = hi_1y - (range_1y * 0.382)
     df['Fibo_500'] = hi_1y - (range_1y * 0.500)
     df['Fibo_618'] = hi_1y - (range_1y * 0.618)
     
-    # 추세
     slope = (df['MA120'].iloc[-1] - df['MA120'].iloc[-20]) / (df['MA120'].iloc[-20] + 1e-9) * 100
     df['Regime'] = "🚀 상승" if slope > 0.4 else "📉 하락" if slope < -0.4 else "↔️ 횡보"
     return df
@@ -181,20 +189,23 @@ def calculate_organic_strategy(df, buy_price=0):
 with st.sidebar:
     st.title("⚡ Hybrid Light Final")
     market_on, market_msg = get_market_status()
+    # 사이드바에 현재 한국 시간 표시 (확인용)
+    st.write(f"🇰🇷 현재 시간: {get_now_kst().strftime('%H:%M:%S')}")
     st.info(f"**현재 시장: {market_msg}**")
     tg_token = st.text_input("Bot Token", type="password")
     tg_id = st.text_input("Chat ID")
     alert_portfolio = st.checkbox("보유종목 실시간 알림", value=True)
     alert_scanner = st.checkbox("스캐너 고득점 알림", value=True)
     daily_report_on = st.checkbox("18시 마감 리포트 수신", value=True)
-    auto_refresh = st.checkbox("자동 갱신 활성화", value=False) # 초기값 False 권장
+    auto_refresh = st.checkbox("자동 갱신 활성화", value=False)
     refresh_interval = st.slider("정규장 갱신 주기 (분)", 1, 60, 10)
 
-# 마감 리포트 전송 로직
+# 마감 리포트 전송 로직 (한국 시간 기준)
 if daily_report_on and is_report_time():
-    if "report_sent" not in st.session_state or st.session_state.report_sent != datetime.date.today():
+    today_kst = get_now_kst().date()
+    if "report_sent" not in st.session_state or st.session_state.report_sent != today_kst:
         portfolio = get_portfolio_gsheets()
-        report_msg = f"📝 <b>오늘의 마감 리포트 ({datetime.date.today()})</b>\n\n💼 <b>보유 종목 현황</b>\n"
+        report_msg = f"📝 <b>오늘의 마감 리포트 ({today_kst})</b>\n\n💼 <b>보유 종목 현황</b>\n"
         for _, row in portfolio.iterrows():
             df = fetch_stock_smart(row['Code'], days=10)
             if df is not None:
@@ -202,7 +213,7 @@ if daily_report_on and is_report_time():
                 yield_p = (cp - row['Buy_Price']) / row['Buy_Price'] * 100
                 report_msg += f"- {row['Name']}: {yield_p:+.2f}% ({int(cp):,}원)\n"
         send_telegram_msg(tg_token, tg_id, report_msg + "\n내일의 대응 준비를 마치세요! 🌙")
-        st.session_state.report_sent = datetime.date.today()
+        st.session_state.report_sent = today_kst
 
 tabs = st.tabs(["📊 대시보드", "💼 AI 리포트", "🔍 스캐너", "📈 백테스트", "➕ 관리"])
 
@@ -263,7 +274,6 @@ with tabs[1]:
 with tabs[2]:
     if st.button("🚀 AI 시장 전수 조사 시작"):
         stocks = get_krx_list()
-        # 시총 상위 50개 중 유의미한 종목 필터링
         targets = stocks.sort_values(by='Marcap', ascending=False).head(50)
         found, sc_alert_msg = [], "🔍 <b>고득점 발굴 종목</b>\n\n"
         with ThreadPoolExecutor(max_workers=8) as exec:
@@ -273,7 +283,7 @@ with tabs[2]:
                 if df_scan is not None:
                     strat_tmp = calculate_organic_strategy(df_scan)
                     score = calculate_advanced_score(df_scan, strat_tmp)
-                    if df_scan.iloc[-1]['RSI'] < 60: # 과매수권 제외
+                    if df_scan.iloc[-1]['RSI'] < 60:
                         found.append({"name": name, "cp": df_scan.iloc[-1]['Close'], "strat": strat_tmp, "score": score})
         
         found = sorted(found, key=lambda x: x['score'], reverse=True)
@@ -354,8 +364,14 @@ with tabs[4]:
     st.dataframe(df_p, use_container_width=True)
 
 # ==========================================
-# ⏳ 4. 지능형 자동 갱신
+# ⏳ 4. 지능형 자동 갱신 (한국 시간 기반)
 # ==========================================
 if auto_refresh:
-    time.sleep(refresh_interval * 60)
+    now_kst = get_now_kst()
+    # 장 중이거나 마감 리포트 시간에는 설정된 간격으로 새로고침
+    if market_on or now_kst.hour == 18:
+        time.sleep(refresh_interval * 60)
+    else:
+        # 장외 시간에는 60분 간격으로 대기하여 서버 자원 절약
+        time.sleep(3600)
     st.rerun()
