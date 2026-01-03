@@ -3,7 +3,7 @@ pandas
 numpy
 plotly
 scikit-learn
-streamlit-gsheets
+st-gsheets-connection
 requests
 finance-datareader
 yfinance
