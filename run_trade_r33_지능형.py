@@ -17,7 +17,7 @@ from sklearn.ensemble import RandomForestClassifier
 def get_now_kst():
     return datetime.datetime.now(timezone(timedelta(hours=9)))
 
-st.set_page_config(page_title="AI Master V69.0 Grand Unified", page_icon="🏛️", layout="wide")
+st.set_page_config(page_title="AI Master V69.1 Safety Lock", page_icon="🔒", layout="wide")
 
 st.markdown("""
     <style>
@@ -35,9 +35,7 @@ st.markdown("""
     .mode-badge { background-color: #263238; color: #00e676; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     .ai-badge { background-color: #4a148c; color: white; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     
-    /* 적중 지표 태그 스타일 */
     .hit-tag { background-color: #e8f5e9; color: #2e7d32; font-size: 0.8em; padding: 3px 6px; border-radius: 4px; margin-right: 5px; border: 1px solid #c8e6c9; display: inline-block; margin-bottom: 2px; }
-    
     .clock-box { font-size: 1.2em; font-weight: bold; color: #333; text-align: center; margin-bottom: 15px; padding: 10px; background: #e0f7fa; border-radius: 8px; border: 1px solid #b2ebf2; }
     </style>
     """, unsafe_allow_html=True)
@@ -106,7 +104,7 @@ def get_all_indicators(df):
     # 1. Basic & Trend
     df['MA20'] = close.rolling(20).mean()
     
-    # [FIX] ATR (True Range) 적용 - 갭상승/하락 반영
+    # ATR (True Range) 적용 - 갭상승/하락 반영
     tr1 = high - low
     tr2 = (high - close.shift(1)).abs()
     tr3 = (low - close.shift(1)).abs()
@@ -126,18 +124,15 @@ def get_all_indicators(df):
     df['BB_Width'] = (df['BB_Up'] - df['BB_Lo']) / ma_bb
     df['Squeeze'] = df['BB_Width'] < df['BB_Width'].rolling(120).min() * 1.1
 
-    # 3. Classic Oscillators (Active Participation)
-    # RSI
+    # 3. Classic Oscillators
     delta = close.diff(); g = delta.where(delta>0,0).rolling(14).mean(); l = -delta.where(delta<0,0).rolling(14).mean()
     df['RSI'] = 100 - (100/(1+(g/(l+1e-9))))
     
-    # MACD
     exp1 = close.ewm(span=12, adjust=False).mean(); exp2 = close.ewm(span=26, adjust=False).mean()
     df['MACD'] = exp1 - exp2
     df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
     
-    # Stochastic & CCI
     df['SNOW_L'] = calc_stoch(df, 20, 12, 12)
     mad = tp.rolling(14).apply(lambda x: (x - x.mean()).abs().mean())
     df['CCI'] = (tp - tp.rolling(14).mean()) / (0.015 * mad + 1e-9)
@@ -167,7 +162,7 @@ def get_all_indicators(df):
     return df
 
 # ==========================================
-# 🧠 3. Grand Unified 전략 엔진
+# 🧠 3. Grand Unified 전략 (Safety Lock 적용)
 # ==========================================
 def get_darwin_strategy(df, buy_price=0):
     if df is None: return None
@@ -195,43 +190,39 @@ def get_darwin_strategy(df, buy_price=0):
             elif top_feature == 'BB_Pos': logic_mode = "🌊 Mean Reversion"
         except: pass
 
-    # 2. Comprehensive Scoring (Deep Confluence)
+    # 2. Comprehensive Scoring
     score = 0
-    hit_reasons = [] # 적중한 지표 기록
+    hit_reasons = [] 
     
-    # A. Price & Trend Structure
-    if cp >= curr['MVWAP']: 
-        score += 15; hit_reasons.append("기관수급위")
-    if curr['ER'] > 0.5: 
-        score += 10; hit_reasons.append("추세효율↑")
-    if curr['ADX'] > 25:
-        score += 10; hit_reasons.append("추세강도↑")
+    # A. Price & Trend
+    if cp >= curr['MVWAP']: score += 15; hit_reasons.append("기관수급위")
+    if curr['ER'] > 0.5: score += 10; hit_reasons.append("추세효율↑")
+    if curr['ADX'] > 25: score += 10; hit_reasons.append("추세강도↑")
         
-    # B. Oscillator / Momentum
-    if curr['RSI'] < 35: 
-        score += 15; hit_reasons.append("RSI과매도")
-    if curr['CCI'] < -100: 
-        score += 15; hit_reasons.append("CCI침체")
-    if curr['MACD_Hist'] > prev['MACD_Hist']: # MACD 히스토그램 상승 반전
-        score += 10; hit_reasons.append("MACD반전")
+    # B. Oscillator
+    if curr['RSI'] < 35: score += 15; hit_reasons.append("RSI과매도")
+    if curr['CCI'] < -100: score += 15; hit_reasons.append("CCI침체")
+    if curr['MACD_Hist'] > prev['MACD_Hist']: score += 10; hit_reasons.append("MACD반전")
         
-    # C. Smart Money / Volatility
-    if cp <= curr['OB'] * 1.05: 
-        score += 20; hit_reasons.append("OB지지")
-    if curr['MFI'] < 20: 
-        score += 10; hit_reasons.append("MFI바닥")
-    if curr['Squeeze']: 
-        score += 15; hit_reasons.append("변동성응축")
+    # C. Smart Money
+    if cp <= curr['OB'] * 1.05: score += 20; hit_reasons.append("OB지지")
+    if curr['MFI'] < 20: score += 10; hit_reasons.append("MFI바닥")
+    if curr['Squeeze']: score += 15; hit_reasons.append("변동성응축")
 
-    score += (ai_prob * 0.4)
+    # [NEW] Safety Lock Logic (점수 보정)
+    if ai_prob >= 60:
+        score += (ai_prob * 0.4) # 확신 시 가산점
+    elif ai_prob <= 40:
+        score -= 20 # 부정적이면 페널티
+    else: # 41~59% (애매한 구간)
+        score = score * 0.8 # 총점의 20% 삭감
 
-    # 3. Precision Pricing (1, 2, 3차)
+    # 3. Precision Pricing
     def adj(p):
         if np.isnan(p) or p <= 0: return 0
         t = 1 if p<2000 else 5 if p<5000 else 10 if p<20000 else 50 if p<50000 else 100 if p<200000 else 500
         return int(round(p/t)*t)
     
-    # 모든 지지선 후보 총출동
     candidates = [
         (adj(curr['MVWAP']), "MVWAP"),
         (adj(curr['OB']), "OB"),
@@ -240,7 +231,6 @@ def get_darwin_strategy(df, buy_price=0):
         (adj(curr['POC']), "POC")
     ]
     
-    # 모드별 우선순위
     if logic_mode == "🔥 Trend Mode": candidates.sort(key=lambda x: (x[1] != 'MVWAP', x[1] != 'Fibo', -x[0]))
     elif logic_mode == "🏛️ Whale Mode": candidates.sort(key=lambda x: (x[1] != 'OB', x[1] != 'POC', -x[0]))
     else: candidates.sort(key=lambda x: x[0], reverse=True)
@@ -271,12 +261,12 @@ def get_darwin_strategy(df, buy_price=0):
     return {"buy": final_buys, "sell": sell_pts, "avg": est_avg, "score": int(score), "status": status, "ai": ai_prob, "logic": logic_mode, "top_feat": top_feature, "reasons": hit_reasons}
 
 # ==========================================
-# 🖥️ 4. 메인 UI (Auto-Run & Details)
+# 🖥️ 4. 메인 UI (Unified + Auto)
 # ==========================================
 with st.sidebar:
     now = get_now_kst()
     st.markdown(f'<div class="clock-box">⏰ {now.strftime("%H:%M:%S")}</div>', unsafe_allow_html=True)
-    st.title("🏛️ V69.0 Unified")
+    st.title("🔒 V69.1 Safety Lock")
     
     with st.expander("⚙️ 설정 및 자동화", expanded=True):
         tg_token = st.text_input("Bot Token", type="password")
@@ -294,7 +284,7 @@ with st.sidebar:
     if auto_report and now.hour == report_time.hour and now.minute == report_time.minute:
         pf_rep = get_portfolio_gsheets()
         if not pf_rep.empty:
-            msg = f"🏛️ <b>[{report_time.strftime('%H:%M')} 정기 리포트]</b>\n"
+            msg = f"🔒 <b>[{report_time.strftime('%H:%M')} 정기 리포트]</b>\n"
             for _, r in pf_rep.iterrows():
                 d = get_data_safe(r['Code'], days=5)
                 if d is not None:
@@ -364,8 +354,8 @@ with tabs[1]: # 스캐너
     
     if auto_refresh: time.sleep(refresh_min * 60); st.rerun()
 
-with tabs[2]: # 5년 검증
-    st.subheader("🧬 5년 진화 성적표 (Unified Logic)")
+with tabs[2]: # 5년 검증 (Fixed Indicator Calc)
+    st.subheader("🧬 5년 진화 성적표 (Safety Lock Applied)")
     if st.button("🚀 5년 데이터 검증 시작"):
         pf = get_portfolio_gsheets()
         sample_codes = pf['Code'].tolist() if not pf.empty else []
@@ -393,7 +383,7 @@ with tabs[2]: # 5년 검증
             df_res['Win_Rate'] = (df_res['Win'].cumsum() / df_res['Count'].cumsum() * 100)
             c1, c2 = st.columns(2)
             c1.metric("총 검증", f"{len(df_res)}회"); c2.metric("누적 승률", f"{df_res['Win_Rate'].iloc[-1]:.1f}%")
-            fig = px.line(df_res, x='Date', y='Win_Rate', title="5년 승률 변화 (Unified)", markers=False)
+            fig = px.line(df_res, x='Date', y='Win_Rate', title="5년 승률 변화 (Safety Logic)", markers=False)
             fig.add_hline(y=50, line_dash="dot", line_color="gray"); st.plotly_chart(fig, use_container_width=True)
         else: st.error("데이터 부족")
 
