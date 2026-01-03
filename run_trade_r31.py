@@ -12,12 +12,12 @@ from streamlit_gsheets import GSheetsConnection
 from sklearn.ensemble import RandomForestClassifier
 
 # ==========================================
-# ⚙️ 1. 시스템 설정 및 스타일
+# ⚙️ 1. 시스템 설정
 # ==========================================
 def get_now_kst():
     return datetime.datetime.now(timezone(timedelta(hours=9)))
 
-st.set_page_config(page_title="AI Master V65.3 SMC+Fibo", page_icon="🏛️", layout="wide")
+st.set_page_config(page_title="AI Master V65.3.1", page_icon="🏛️", layout="wide")
 
 st.markdown("""
     <style>
@@ -33,11 +33,9 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- [유틸리티: 안정성 강화 패치 적용] ---
+# --- [유틸리티] ---
 @st.cache_data(ttl=86400)
 def get_safe_stock_listing():
-    """KRX 서버 불안정 시 우량주 50개 백업 리스트 사용"""
-    # 1. 분할 호출 시도
     try:
         kospi = fdr.StockListing('KOSPI')
         kosdaq = fdr.StockListing('KOSDAQ')
@@ -45,7 +43,6 @@ def get_safe_stock_listing():
         if not df.empty: return df
     except: pass
     
-    # 2. 실패 시 하드코딩된 백업 리스트 (Backup)
     fallback_data = [
         ['005930', '삼성전자'], ['000660', 'SK하이닉스'], ['373220', 'LG에너지솔루션'],
         ['207940', '삼성바이오로직스'], ['005380', '현대차'], ['000270', '기아'],
@@ -66,11 +63,10 @@ def get_safe_stock_listing():
         ['066970', '엘앤에프'], ['277810', '천보']
     ]
     df_fb = pd.DataFrame(fallback_data, columns=['Code', 'Name'])
-    df_fb['Marcap'] = 10**15 # 스캐너 통과용 가상 시총
+    df_fb['Marcap'] = 10**15 
     return df_fb
 
 def get_portfolio_gsheets():
-    """구글 시트 컬럼 자동 매핑"""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = conn.read(ttl="0")
@@ -93,7 +89,7 @@ def send_telegram_msg(token, chat_id, message):
         except: pass
 
 # ==========================================
-# 📊 2. 지표 엔진 (SMC + Fibo + Organic)
+# 📊 2. 지표 엔진 (수정됨: 계산 순서 변경)
 # ==========================================
 def calc_stoch(df, n, m, t):
     l, h = df['Low'].rolling(n).min(), df['High'].rolling(n).max()
@@ -102,6 +98,10 @@ def calc_stoch(df, n, m, t):
 def get_all_indicators(df):
     if df is None or len(df) < 120: return None
     df = df.copy(); close = df['Close']
+    
+    # [FIX] 기본 지표(MA20, ATR)를 가장 먼저 계산해야 함 (KeyError 방지)
+    df['MA20'] = close.rolling(20).mean()
+    df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
     
     # 1. 🏛️ Order Block (SMC)
     # 조건: 3% 이상 급등 & 거래량 증가한 양봉 직전의 '음봉'
@@ -114,17 +114,15 @@ def get_all_indicators(df):
                 # 오더블럭은 직전 음봉의 (시가+저가)/2 (중심값)
                 ob_price = (df['Open'].iloc[i-1] + df['Low'].iloc[i-1]) / 2
                 break
-    df['OB'] = ob_price if ob_price > 0 else df['MA20'].iloc[-1] # 없으면 20일선
+    # [FIX] 위에서 MA20을 먼저 계산했으므로 이제 에러가 안 남
+    df['OB'] = ob_price if ob_price > 0 else df['MA20'].iloc[-1]
 
     # 2. 🧬 Fibonacci 0.618
     hi_1y = df.tail(252)['High'].max()
     lo_1y = df.tail(252)['Low'].min()
     df['Fibo_618'] = hi_1y - ((hi_1y - lo_1y) * 0.618)
 
-    # 3. 기본 및 유기적 지표
-    df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
-    df['MA20'] = close.rolling(20).mean()
-    
+    # 3. 추가 지표들
     # Bollinger Bands (User: 50, 0.5)
     ma_bb1 = close.rolling(50).mean(); std_bb1 = close.rolling(50).std()
     df['BB1_Up'] = ma_bb1 + (std_bb1 * 0.5); df['BB1_Lo'] = ma_bb1 - (std_bb1 * 0.5)
@@ -156,13 +154,13 @@ def get_all_indicators(df):
     return df
 
 # ==========================================
-# 🧠 3. 전략 엔진 (유기적 타점 계산)
+# 🧠 3. 전략 엔진
 # ==========================================
 def get_strategy(df, buy_price=0):
     if df is None: return None
     curr = df.iloc[-1]; cp = curr['Close']; atr = curr['ATR']
     
-    # 3-1. AI ML 예측
+    # AI ML 예측
     data_ml = df.copy()[['RSI','SNOW_L','CCI','MFI','ADX','Vol_Z']].dropna()
     ai_prob = 50
     if len(data_ml) > 60:
@@ -173,7 +171,7 @@ def get_strategy(df, buy_price=0):
             ai_prob = int(model.predict_proba(data_ml.iloc[-1:])[0][1] * 100)
         except: pass
 
-    # 3-2. Tuning (시장 변동성 대응)
+    # Tuning
     vol = atr / cp if cp > 0 else 0
     tune = {'rsi': 30, 'snow': 28, 'mode': '🛡️ 보수'} if vol > 0.04 else {'rsi': 50, 'snow': 45, 'mode': '⚡ 공격'} if vol < 0.015 else {'rsi': 40, 'snow': 35, 'mode': '⚖️ 균형'}
 
@@ -182,23 +180,19 @@ def get_strategy(df, buy_price=0):
         t = 1 if p<2000 else 5 if p<5000 else 10 if p<20000 else 50 if p<50000 else 100 if p<200000 else 500
         return int(round(p/t)*t)
 
-    # 3-3. [3분할 타점: 4대 지지선 경쟁]
-    # POC(매물), OB(세력), Fibo(황금비), BB(추세) 중 현재가 아래에 있는 최적 3개 선정
+    # [3분할 타점: 4대 지지선 경쟁]
     candidates = [
         (adj(curr['POC']), "POC"),
         (adj(curr['OB']), "OB"),
         (adj(curr['Fibo_618']), "Fibo"),
         (adj(curr['BB1_Lo']), "BB")
     ]
-    # 가격 내림차순 정렬 (현재가와 가까운 순서대로 1,2,3차)
     candidates.sort(key=lambda x: x[0], reverse=True)
     
-    # 필터링: 현재가보다 낮거나 같은 가격만 유효
     valid_buys = [x for x in candidates if x[0] <= cp]
     
-    # 부족하면 동적 생성 (Dynamic Fallback)
     final_buys = []
-    if not valid_buys: # 지지선 전멸 시
+    if not valid_buys:
         final_buys = [adj(cp), adj(cp*0.95), adj(cp*0.90)]
     elif len(valid_buys) == 1:
         final_buys = [valid_buys[0][0], adj(valid_buys[0][0]*0.95), adj(valid_buys[0][0]*0.90)]
@@ -207,15 +201,13 @@ def get_strategy(df, buy_price=0):
     else:
         final_buys = [valid_buys[0][0], valid_buys[1][0], valid_buys[2][0]]
 
-    # 매도 타점: BB상단, 변동성 3배, 변동성 5배
     sell_pts = [adj(curr['BB1_Up']), adj(cp + atr*3), adj(cp + atr*5)]
     
-    # 3-4. 점수 산출 (Confluence Bonus)
+    # 점수 산출
     score = 0
     if curr['SNOW_L'] < tune['snow']: score += 15
     if curr['RSI'] < tune['rsi']: score += 10
     if curr['MFI'] < 20: score += 15
-    # 세력선(OB)과 피보나치(Fibo) 근처면 가산점
     if cp <= curr['OB'] * 1.05: score += 15 
     if cp <= curr['Fibo_618'] * 1.05: score += 15 
     score += (ai_prob * 0.4)
@@ -230,7 +222,7 @@ def get_strategy(df, buy_price=0):
     return {"buy": final_buys, "sell": sell_pts, "score": int(score), "status": status, "ai": ai_prob, "tune": tune, "ob": curr['OB'], "fibo": curr['Fibo_618'], "poc": curr['POC']}
 
 # ==========================================
-# 🖥️ 4. 메인 UI (탭 구성)
+# 🖥️ 4. 메인 UI
 # ==========================================
 with st.sidebar:
     st.title("🏛️ V65.3 SMC+Fibo")
@@ -241,7 +233,6 @@ with st.sidebar:
     min_m = st.number_input("최소 시총(억)", value=3000) * 100000000
     auto_report = st.checkbox("16시 마감 리포트", value=True)
     
-    # 16시 리포트 로직
     if auto_report and now.hour == 16 and now.minute == 0:
         pf_rep = get_portfolio_gsheets()
         if not pf_rep.empty:
@@ -272,7 +263,7 @@ with tabs[0]: # 대시보드
         c3.metric("손익", f"{int(t_eval-t_buy):,}원")
         if dash_list: st.plotly_chart(px.bar(pd.DataFrame(dash_list), x='종목', y='수익', color='상태', template="plotly_white"), use_container_width=True)
 
-with tabs[1]: # 스캐너 (SMC+Fibo 시각화)
+with tabs[1]: # 스캐너
     if st.button("🚀 SMC + Fibo 전수조사"):
         krx = get_safe_stock_listing(); targets = krx[krx['Marcap'] >= min_m].sort_values('Marcap', ascending=False).head(50)
         found, prog = [], st.progress(0)
@@ -315,13 +306,10 @@ with tabs[2]: # AI 리포트
                 <p>{res['status']['msg']} (OB: {res['ob']:,}원 / Fibo: {res['fibo']:,}원)</p></div>""", unsafe_allow_html=True)
             
             fig = go.Figure(data=[go.Candlestick(x=df_ai.index[-100:], open=df_ai['Open'][-100:], close=df_ai['Close'][-100:], high=df_ai['High'][-100:], low=df_ai['Low'][-100:])])
-            # OB: 보라색 점선, Fibo: 초록색 점선
-            fig.add_hline(y=res['ob'], line_color="purple", line_width=2, line_dash="dash", annotation_text="Order Block(세력)")
+            fig.add_hline(y=res['ob'], line_color="purple", line_width=2, line_dash="dash", annotation_text="Order Block")
             fig.add_hline(y=res['fibo'], line_color="green", line_width=2, line_dash="dot", annotation_text="Fibo 0.618")
             fig.update_layout(height=450, template="plotly_white", xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
-
-            
 
 with tabs[3]: # 백테스트
     bt_name = st.text_input("백테스트 종목", "삼성전자")
