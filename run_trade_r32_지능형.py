@@ -17,7 +17,7 @@ from sklearn.ensemble import RandomForestClassifier
 def get_now_kst():
     return datetime.datetime.now(timezone(timedelta(hours=9)))
 
-st.set_page_config(page_title="AI Master V66.4", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="AI Master V67.2 Ultimate", page_icon="🧬", layout="wide")
 
 st.markdown("""
     <style>
@@ -34,6 +34,10 @@ st.markdown("""
     .logic-tag { font-size: 0.8em; color: #555; background-color: rgba(255,255,255,0.7); padding: 2px 5px; border-radius: 4px; margin-left: 5px; }
     .mode-badge { background-color: #263238; color: #00e676; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     .ai-badge { background-color: #6200ea; color: white; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
+    .win-badge { background-color: #e8f5e9; color: #2e7d32; padding: 3px 8px; border-radius: 6px; font-weight: bold; }
+    
+    /* 실시간 시계 스타일 */
+    .clock-box { font-size: 1.2em; font-weight: bold; color: #333; text-align: center; margin-bottom: 10px; padding: 10px; background: #e0f7fa; border-radius: 8px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -101,7 +105,6 @@ def get_all_indicators(df):
     df['MA20'] = close.rolling(20).mean()
     df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
     
-    # SMC (OB)
     df['Is_Impulse'] = (df['Close'] > df['Open'] * 1.03) & (df['Volume'] > df['Volume'].rolling(20).mean())
     ob_price = 0
     for i in range(len(df)-2, len(df)-60, -1):
@@ -111,11 +114,9 @@ def get_all_indicators(df):
                 break
     df['OB'] = ob_price if ob_price > 0 else df['MA20'].iloc[-1]
 
-    # Fibo
     hi_1y = df.tail(252)['High'].max(); lo_1y = df.tail(252)['Low'].min()
     df['Fibo_618'] = hi_1y - ((hi_1y - lo_1y) * 0.618)
 
-    # Indicators
     ma_bb1 = close.rolling(50).mean(); std_bb1 = close.rolling(50).std()
     df['BB1_Up'] = ma_bb1 + (std_bb1 * 0.5); df['BB1_Lo'] = ma_bb1 - (std_bb1 * 0.5)
     
@@ -126,7 +127,6 @@ def get_all_indicators(df):
     exp1 = close.ewm(span=12, adjust=False).mean(); exp2 = close.ewm(span=26, adjust=False).mean()
     df['MACD_Osc'] = (exp1 - exp2) - (exp1 - exp2).ewm(span=9, adjust=False).mean()
 
-    # CCI, MFI, ADX
     tp = (df['High'] + df['Low'] + close) / 3
     mad = tp.rolling(14).apply(lambda x: (x - x.mean()).abs().mean())
     df['CCI'] = (tp - tp.rolling(14).mean()) / (0.015 * mad + 1e-9)
@@ -153,7 +153,6 @@ def get_darwin_strategy(df, buy_price=0):
     if df is None: return None
     curr = df.iloc[-1]; cp = curr['Close']; atr = curr['ATR']
     
-    # 1. Feature Selection
     df['BB_Dist'] = (curr['BB1_Lo'] - cp) / cp 
     data_ml = df.copy()[['RSI','SNOW_L','CCI','MFI','ADX','Vol_Z', 'BB_Dist']].dropna()
     features = ['RSI','SNOW_L','CCI','MFI','ADX','Vol_Z', 'BB_Dist']
@@ -173,7 +172,6 @@ def get_darwin_strategy(df, buy_price=0):
             ai_prob = int(model.predict_proba(data_ml[features].iloc[-1:])[0][1] * 100)
         except: pass
 
-    # 2. Score
     score = 0
     if (curr['SNOW_L'] < 30) or (curr['RSI'] < 35): score += 10
     
@@ -195,7 +193,6 @@ def get_darwin_strategy(df, buy_price=0):
         if curr['CCI'] < -100: score += 15
     score += (ai_prob * 0.4)
 
-    # 3. 3-Split Calculation
     def adj(p):
         if np.isnan(p) or p <= 0: return 0
         t = 1 if p<2000 else 5 if p<5000 else 10 if p<20000 else 50 if p<50000 else 100 if p<200000 else 500
@@ -237,16 +234,21 @@ def get_darwin_strategy(df, buy_price=0):
     return {"buy": final_buys, "sell": sell_pts, "avg": est_avg_price, "score": int(score), "status": status, "ai": ai_prob, "logic": logic_mode, "top_feat": top_feature, "ob": curr['OB']}
 
 # ==========================================
-# 🖥️ 4. 메인 UI (Current Price View)
+# 🖥️ 4. 메인 UI (Integrated)
 # ==========================================
 with st.sidebar:
-    st.title("🛡️ V66.4 Darwin Price")
+    # 실시간 시계
     now = get_now_kst()
-    st.info(f"KST: {now.strftime('%H:%M:%S')}")
+    st.markdown(f'<div class="clock-box">⏰ {now.strftime("%H:%M:%S")}</div>', unsafe_allow_html=True)
+    
+    st.title("📡 V67.2 Ultimate")
     tg_token = st.text_input("Bot Token", type="password")
     tg_id = st.text_input("Chat ID")
-    min_m = st.number_input("최소 시총(억)", value=3000) * 100000000
+    
+    scanner_alert = st.checkbox("📢 스캔 결과 자동 전송", value=True)
     auto_report = st.checkbox("16시 마감 리포트", value=True)
+    min_m = st.number_input("최소 시총(억)", value=3000) * 100000000
+    
     if auto_report and now.hour == 16 and now.minute == 0:
         pf_rep = get_portfolio_gsheets()
         if not pf_rep.empty:
@@ -258,7 +260,7 @@ with st.sidebar:
                     msg += f"{r['Name']}: {pct:+.2f}%\n"
             send_telegram_msg(tg_token, tg_id, msg)
 
-tabs = st.tabs(["📊 대시보드", "🔍 스캐너", "💼 AI 리포트", "📈 백테스트", "➕ 관리"])
+tabs = st.tabs(["📊 대시보드", "🔍 스캐너", "🧬 진화 검증", "💼 AI 리포트", "➕ 관리"])
 
 with tabs[0]: # 대시보드
     pf = get_portfolio_gsheets()
@@ -276,7 +278,7 @@ with tabs[0]: # 대시보드
         c3.metric("손익", f"{int(t_eval-t_buy):,}원")
         if dash_list: st.plotly_chart(px.bar(pd.DataFrame(dash_list), x='종목', y='수익', color='상태', template="plotly_white"), use_container_width=True)
 
-with tabs[1]: # 스캐너 (현재가 추가)
+with tabs[1]: # 스캐너 (Telegram Alert)
     if st.button("🧬 Darwin Evolution 스캔"):
         krx = get_safe_stock_listing(); targets = krx[krx['Marcap'] >= min_m].sort_values('Marcap', ascending=False).head(50)
         found, prog = [], st.progress(0)
@@ -286,24 +288,28 @@ with tabs[1]: # 스캐너 (현재가 추가)
                 res = f.result()
                 if res is not None:
                     s = get_darwin_strategy(res)
-                    # [NEW] 현재가 추출
                     cp = res['Close'].iloc[-1]
                     found.append({"name": futs[f], "score": s['score'], "strat": s, "cp": cp})
                 prog.progress((i+1)/len(targets))
         
-        for d in sorted(found, key=lambda x: x['score'], reverse=True)[:15]:
+        top_picks = sorted(found, key=lambda x: x['score'], reverse=True)[:15]
+        
+        # 텔레그램 자동 전송
+        if scanner_alert and top_picks and tg_token and tg_id:
+            msg = f"🚀 <b>[AI 스캔 Top 5]</b> ({now.strftime('%H:%M')})\n\n"
+            for item in top_picks[:5]:
+                s = item['strat']
+                msg += f"<b>{item['name']}</b> ({s['logic']})\n💰 {item['cp']:,}원 / 🎯 {s['buy'][0][0]:,}원\n🏆 {s['score']}점 (AI:{s['ai']}%)\n\n"
+            send_telegram_msg(tg_token, tg_id, msg)
+            st.toast("📨 텔레그램 전송 완료!")
+
+        for d in top_picks:
             s = d['strat']
             st.markdown(f"""
                 <div class="scanner-card">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div>
-                            <h3 style="margin:0;">{d['name']}</h3>
-                            <span class="current-price">{d['cp']:,}원</span>
-                        </div>
-                        <div style="text-align:right;">
-                            <span class="mode-badge">{s['logic']}</span> <span class="ai-badge">AI: {s['ai']}%</span><br>
-                            <span style="font-size:0.8em; color:#666;">Score: {d['score']}</span>
-                        </div>
+                        <div><h3 style="margin:0;">{d['name']}</h3><span class="current-price">{d['cp']:,}원</span></div>
+                        <div style="text-align:right;"><span class="mode-badge">{s['logic']}</span> <span class="ai-badge">AI: {s['ai']}%</span><br><span style="font-size:0.8em; color:#666;">Score: {d['score']}</span></div>
                     </div>
                     <div style="margin: 15px 0; display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
                         <div class="buy-box">
@@ -322,7 +328,52 @@ with tabs[1]: # 스캐너 (현재가 추가)
                     </div>
                 </div>""", unsafe_allow_html=True)
 
-with tabs[2]: # AI 리포트 (현재가 추가)
+with tabs[2]: # 🧬 진화 검증 (Time Machine)
+    st.subheader("🧬 Darwin 진화 성적표 (Time Machine)")
+    st.info("💡 과거 데이터를 타임머신으로 분석하여 AI의 실력을 검증합니다.")
+    
+    if st.button("🚀 과거 데이터 검증 시작"):
+        pf = get_portfolio_gsheets()
+        sample_codes = pf['Code'].tolist() if not pf.empty else []
+        fb = get_safe_stock_listing().head(5)['Code'].tolist()
+        targets = list(set(sample_codes + fb))[:10]
+        
+        results = []
+        prog = st.progress(0)
+        
+        for idx, code in enumerate(targets):
+            full_df = get_data_safe(code, days=365)
+            if full_df is not None and len(full_df) > 150:
+                for i in range(24, 0, -1): # 24주 전부터 검사
+                    past_date_idx = - (i * 5)
+                    if abs(past_date_idx) < len(full_df) - 60:
+                        past_df = full_df.iloc[:past_date_idx]
+                        future_df = full_df.iloc[past_date_idx:]
+                        
+                        if len(future_df) >= 5:
+                            res = get_darwin_strategy(past_df)
+                            if res['score'] >= 50:
+                                entry = past_df['Close'].iloc[-1]
+                                exit_p = future_df['Close'].iloc[4]
+                                results.append({"Date": past_df.index[-1], "Win": 1 if exit_p > entry else 0, "Count": 1})
+            prog.progress((idx+1)/len(targets))
+            
+        if results:
+            df_res = pd.DataFrame(results).sort_values('Date')
+            df_res['Win_Rate'] = (df_res['Win'].cumsum() / df_res['Count'].cumsum() * 100)
+            
+            c1, c2 = st.columns(2)
+            c1.metric("총 시그널", f"{len(df_res)}회")
+            c2.metric("누적 승률", f"{df_res['Win_Rate'].iloc[-1]:.1f}%")
+            
+            fig = px.line(df_res, x='Date', y='Win_Rate', title="AI 승률 변화 추이", markers=True)
+            fig.add_hline(y=50, line_dash="dot", line_color="gray")
+            fig.update_layout(yaxis_range=[0, 100])
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.error("데이터 부족")
+
+with tabs[3]: # AI 리포트 (수동 전송)
     if not pf.empty:
         sel = st.selectbox("종목 선택", pf['Name'].unique())
         row = pf[pf['Name'] == sel].iloc[0]
@@ -331,58 +382,27 @@ with tabs[2]: # AI 리포트 (현재가 추가)
             res = get_darwin_strategy(df_ai, row['Buy_Price'])
             cp = df_ai['Close'].iloc[-1]
             
-            buy_html = f"""<div class="buy-box">
-                <b>🔵 3분할 매수 (Support)</b><br>
-                1차: <b>{res['buy'][0][0]:,}원</b> ({res['buy'][0][1]})<br>
-                2차: <b>{res['buy'][1][0]:,}원</b> ({res['buy'][1][1]})<br>
-                3차: <b>{res['buy'][2][0]:,}원</b> ({res['buy'][2][1]})
-                <div class="avg-text">예상 평단: {res['avg']:,}원</div>
-            </div>"""
+            if st.button("📡 텔레그램으로 전략 전송"):
+                msg = f"💼 <b>[{sel}] 대응 전략</b>\n💰 현재가: {cp:,}원\n\n🔵 1차매수: {res['buy'][0][0]:,}원\n🔴 1차매도: {res['sell'][0][0]:,}원\n💡 예상평단: {res['avg']:,}원"
+                send_telegram_msg(tg_token, tg_id, msg)
+                st.success("전송 완료")
             
-            sell_html = f"""<div class="sell-box">
-                <b>🔴 3분할 매도 (Target)</b><br>
-                1차: <b>{res['sell'][0][0]:,}원</b> ({res['sell'][0][1]})<br>
-                2차: <b>{res['sell'][1][0]:,}원</b> ({res['sell'][1][1]})<br>
-                3차: <b>{res['sell'][2][0]:,}원</b> ({res['sell'][2][1]})
-            </div>"""
+            # 전략 패널 (무조건 표시)
+            buy_html = f"""<div class="buy-box"><b>🔵 3분할 매수</b><br>1차: <b>{res['buy'][0][0]:,}원</b> ({res['buy'][0][1]})<br>2차: <b>{res['buy'][1][0]:,}원</b> ({res['buy'][1][1]})<br>3차: <b>{res['buy'][2][0]:,}원</b> ({res['buy'][2][1]})<div class="avg-text">예상 평단: {res['avg']:,}원</div></div>"""
+            sell_html = f"""<div class="sell-box"><b>🔴 3분할 매도</b><br>1차: <b>{res['sell'][0][0]:,}원</b> ({res['sell'][0][1]})<br>2차: <b>{res['sell'][1][0]:,}원</b> ({res['sell'][1][1]})<br>3차: <b>{res['sell'][2][0]:,}원</b> ({res['sell'][2][1]})</div>"""
             
             st.markdown(f"""<div class="metric-card" style="border-left:10px solid {res['status']['color']};">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <div>
-                        <h2>{sel} <span class="mode-badge">{res['logic']}</span></h2>
-                        <p style="font-size:1.1em; margin:0;">{res['status']['msg']} (AI승률: {res['ai']}%)</p>
-                    </div>
-                    <div style="text-align:right;">
-                        <h2 style="color:#333; margin:0;">{cp:,}원</h2>
-                        <span style="color:#666;">현재가</span>
-                    </div>
+                <div style="display:flex; justify-content:space-between;">
+                    <div><h2>{sel} <span class="mode-badge">{res['logic']}</span></h2><p style="font-size:1.1em;">{res['status']['msg']} (AI승률: {res['ai']}%)</p></div>
+                    <div style="text-align:right;"><h2 style="color:#333;">{cp:,}원</h2></div>
                 </div>
-                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px; margin-top:20px;">
-                    {buy_html} {sell_html}
-                </div>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px; margin-top:20px;">{buy_html} {sell_html}</div>
                 </div>""", unsafe_allow_html=True)
             
             fig = go.Figure(data=[go.Candlestick(x=df_ai.index[-100:], open=df_ai['Open'][-100:], close=df_ai['Close'][-100:], high=df_ai['High'][-100:], low=df_ai['Low'][-100:])])
             fig.add_hline(y=res['ob'], line_color="purple", line_width=2, line_dash="dash", annotation_text="Order Block")
             fig.update_layout(height=450, template="plotly_white", xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
-
-            
-
-with tabs[3]: # 백테스트
-    bt_name = st.text_input("백테스트 종목", "삼성전자")
-    if st.button("검증 실행"):
-        krx = get_safe_stock_listing(); m = krx[krx['Name'] == bt_name]
-        if not m.empty:
-            df_bt = get_all_indicators(get_data_safe(m.iloc[0]['Code'], days=730))
-            if df_bt is not None:
-                cash, stocks, equity = 10000000, 0, []
-                for i in range(120, len(df_bt)):
-                    curr = df_bt.iloc[:i+1]; s_res = get_darwin_strategy(curr); cp = df_bt.iloc[i]['Close']
-                    if stocks == 0 and s_res['score'] >= 50: stocks = cash // cp; cash -= (stocks * cp)
-                    elif stocks > 0 and cp >= s_res['sell'][0][0]: cash += (stocks * cp); stocks = 0
-                    equity.append(cash + (stocks * cp))
-                st.plotly_chart(px.line(pd.DataFrame(equity, columns=['total']), y='total', title=f"{bt_name} 자산 성장"))
 
 with tabs[4]: # 관리
     df_p = get_portfolio_gsheets()
