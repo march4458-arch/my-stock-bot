@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import FinanceDataReader as fdr
 import yfinance as yf
-import datetime, time, requests
+import datetime, time, requests, os
 from datetime import timezone, timedelta
 import numpy as np
 import plotly.express as px
@@ -24,7 +24,7 @@ def check_market_open():
     end_time = datetime.time(15, 30)
     return start_time <= now.time() <= end_time
 
-st.set_page_config(page_title="AI Master V71.1 Smart Exit", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="AI Master V71.2 Data Shield", page_icon="🛡️", layout="wide")
 
 st.markdown("""
     <style>
@@ -41,8 +41,6 @@ st.markdown("""
     .mode-badge { background-color: #263238; color: #00e676; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     .ai-badge { background-color: #2e7d32; color: white; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     .pro-tag { background-color: #e3f2fd; color: #0d47a1; font-size: 0.75em; padding: 2px 5px; border-radius: 4px; border: 1px solid #90caf9; font-weight:bold; }
-    .hit-tag { background-color: #fff3e0; color: #e65100; font-size: 0.8em; padding: 3px 6px; border-radius: 4px; margin-right: 5px; border: 1px solid #ffe0b2; display: inline-block; margin-bottom: 2px; }
-    
     .exit-alert { color: #d32f2f; font-weight: bold; font-size: 0.9em; background: #ffQqee; padding: 5px; border-radius: 5px; margin-top: 5px; display: block; }
     
     .clock-box { font-size: 1.2em; font-weight: bold; color: #333; text-align: center; margin-bottom: 5px; padding: 10px; background: #e0f7fa; border-radius: 8px; border: 1px solid #b2ebf2; }
@@ -54,38 +52,65 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- [Data Loader] ---
-@st.cache_data(ttl=60)
+# --- [Data Loader: V71.2 Anti-Blocking System] ---
+# 1. 캐시 수명 12시간으로 대폭 연장
+@st.cache_data(ttl=43200) 
 def get_data_safe(code, days=2000):
+    # 2. 로컬 저장소 폴더 생성
+    save_dir = "stock_data"
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    
+    today_str = datetime.datetime.now().strftime('%Y%m%d')
+    file_path = f"{save_dir}/{code}_{today_str}.csv"
     start_date = (get_now_kst() - timedelta(days=days)).strftime('%Y-%m-%d')
+
+    # 3. 파일이 있으면 로컬에서 로드 (서버 접속 X)
+    if os.path.exists(file_path):
+        try:
+            df = pd.read_csv(file_path, index_col=0, parse_dates=True)
+            if not df.empty:
+                df.attrs['source'] = "💾 Local File"
+                return df
+        except: pass # 파일 깨졌으면 다시 다운로드
+
+    # 4. 파일 없으면 다운로드 (딜레이 적용)
+    time.sleep(0.2) # 매너 딜레이 (차단 방지 핵심)
+    
     try:
         df = fdr.DataReader(code, start_date)
         if df is not None and not df.empty:
-            df.attrs['source'] = "🇰🇷 KRX (FDR)"
+            df.to_csv(file_path) # 성공 시 저장
+            df.attrs['source'] = "🇰🇷 KRX (New)"
             return df
     except: pass
+    
     try:
         df = yf.download(f"{code}.KS", start=start_date, progress=False)
         if not df.empty:
-            df.attrs['source'] = "🇺🇸 Yahoo (KOSPI)"
+            df.to_csv(file_path)
+            df.attrs['source'] = "🇺🇸 Yahoo (New)"
             return df
     except: pass
+    
     try:
         df = yf.download(f"{code}.KQ", start=start_date, progress=False)
         if not df.empty:
-            df.attrs['source'] = "🇺🇸 Yahoo (KOSDAQ)"
+            df.to_csv(file_path)
+            df.attrs['source'] = "🇺🇸 Yahoo (New)"
             return df
     except: pass
+    
     return None
 
 @st.cache_data(ttl=86400)
 def get_safe_stock_listing():
     try:
         df = fdr.StockListing('KRX')
-        if not df.empty: return df, "⚡ KRX Live (전체)"
+        if not df.empty: return df, "⚡ KRX Live"
     except: pass
     fb = [['005930','삼성전자'],['000660','SK하이닉스'],['373220','LG에너지솔루션'],['207940','삼성바이오로직스'],['005380','현대차'],['000270','기아'],['005490','POSCO홀딩스'],['035420','NAVER'],['006400','삼성SDI'],['051910','LG화학'],['105560','KB금융'],['086520','에코프로'],['247540','에코프로비엠'],['042660','한화오션'],['010130','고려아연'],['034020','두산에너빌리티'],['035720','카카오'],['003670','포스코퓨처엠'],['028260','삼성물산'],['055550','신한지주']]
-    return pd.DataFrame(fb, columns=['Code','Name']).assign(Marcap=10**15), "⚠️ Backup List (20개)"
+    return pd.DataFrame(fb, columns=['Code','Name']).assign(Marcap=10**15), "⚠️ Backup List"
 
 def get_portfolio_gsheets():
     try:
@@ -110,7 +135,7 @@ def send_telegram_msg(token, chat_id, message):
         except: pass
 
 # ==========================================
-# 📊 2. Smart 지표 엔진 (캔들 패턴 추가)
+# 📊 2. Smart 지표 엔진 (V71.1 동일)
 # ==========================================
 def calc_stoch(df, n, m, t):
     l, h = df['Low'].rolling(n).min(), df['High'].rolling(n).max()
@@ -123,20 +148,17 @@ def get_all_indicators(df):
     close = df['Close']; high = df['High']; low = df['Low']; vol = df['Volume']
     open_p = df['Open']
     
-    # Moving Averages
     df['MA5'] = close.rolling(5).mean()
     df['MA10'] = close.rolling(10).mean()
     df['MA20'] = close.rolling(20).mean()
     df['MA60'] = close.rolling(60).mean()
     df['Disp_5'] = (close / df['MA5']) * 100 
     
-    # [NEW] Candle Patterns (매도용)
-    # 1. 윗꼬리 (Shooting Star Logic)
+    # Candle Patterns
     df['Upper_Shadow'] = high - df[['Open', 'Close']].max(axis=1)
     df['Body'] = (close - open_p).abs()
-    df['Is_Shooting_Star'] = (df['Upper_Shadow'] > df['Body'] * 2) & (high > df['MA5']) # 5일선 위에서 윗꼬리 길면 위험
+    df['Is_Shooting_Star'] = (df['Upper_Shadow'] > df['Body'] * 2) & (high > df['MA5'])
     
-    # 2. 하락 장악형 (Bearish Engulfing)
     prev_open = open_p.shift(1); prev_close = close.shift(1)
     df['Is_Bearish_Engulfing'] = (close < prev_open) & (open_p > prev_close) & (close < open_p) & (prev_close > prev_open)
 
@@ -190,7 +212,7 @@ def get_all_indicators(df):
     return df
 
 # ==========================================
-# 🧠 3. Smart Exit 전략 엔진
+# 🧠 3. Smart Exit 전략 (V71.1 동일)
 # ==========================================
 def get_darwin_strategy(df, buy_price=0):
     if df is None: return None
@@ -212,7 +234,6 @@ def get_darwin_strategy(df, buy_price=0):
 
     is_bull_setup = (curr['MA20'] > curr['MA60']) and (curr['RSI'] > 55)
     
-    # --- [매수 점수 계산] ---
     score = 0; hit_reasons = [] 
     if is_bull_setup:
         logic_mode = "🐆 Trend Hunter"
@@ -232,23 +253,17 @@ def get_darwin_strategy(df, buy_price=0):
     if ai_prob >= 60: score += (ai_prob - 50) * 1.5
     elif ai_prob <= 40: score -= 20
 
-    # --- [NEW] 스마트 매도(Exit) 점수 계산 ---
-    # 점수가 높을수록 매도 압력이 강함
+    # Sell Logic
     sell_score = 0; sell_reasons = []
-    
-    # 1. 캔들 경고
-    if curr['Is_Shooting_Star']: sell_score += 30; sell_reasons.append("🕯️ 유성형(고점신호)")
+    if curr['Is_Shooting_Star']: sell_score += 30; sell_reasons.append("🕯️ 유성형(고점)")
     if curr['Is_Bearish_Engulfing']: sell_score += 30; sell_reasons.append("🕯️ 하락장악형")
-    
-    # 2. 지표 과열
     if curr['RSI'] > 75: sell_score += 20; sell_reasons.append("⚠️ RSI과열")
     if curr['MFI'] > 80: sell_score += 20; sell_reasons.append("⚠️ MFI과열")
-    if cp > curr['BB_Up'] * 1.02: sell_score += 20; sell_reasons.append("⚠️ BB이탈(폭등)")
+    if cp > curr['BB_Up'] * 1.02: sell_score += 20; sell_reasons.append("⚠️ BB이탈")
     
-    # 3. 추세 이탈 (Trailing Stop)
     if is_bull_setup:
         if cp < curr['MA5']: sell_score += 10; sell_reasons.append("📉 5일선붕괴")
-        if cp < curr['MA20']: sell_score += 50; sell_reasons.append("⛔ 20일선붕괴(추세끝)")
+        if cp < curr['MA20']: sell_score += 50; sell_reasons.append("⛔ 20일선붕괴")
     else:
         if cp < prev['Low']: sell_score += 20; sell_reasons.append("📉 전저점이탈")
 
@@ -257,8 +272,6 @@ def get_darwin_strategy(df, buy_price=0):
         t = 1 if p<2000 else 5 if p<5000 else 10 if p<20000 else 50 if p<50000 else 100 if p<200000 else 500
         return int(round(p/t)*t)
     
-    # [Target Calculation] - 유기적 매도 타점
-    # 무조건 ATR로만 하지 않고, 저항선(BB상단, 고점) 등을 참고
     targets = []
     targets.append((adj(curr['BB_Up']), "BB상단(저항)"))
     if is_bull_setup:
@@ -268,10 +281,9 @@ def get_darwin_strategy(df, buy_price=0):
         targets.append((adj(curr['MA60']), "60일선(저항)"))
         targets.append((adj(cp + atr*3), "반등목표"))
     
-    # 타점 정리
     sell_pts = sorted(list(set(targets)), key=lambda x: x[0])
     if len(sell_pts) < 3: sell_pts += [(adj(sell_pts[-1][0]*1.03), "Top")] * (3-len(sell_pts))
-    sell_pts = sell_pts[:3] # 하위 3개만
+    sell_pts = sell_pts[:3]
 
     if is_bull_setup:
         final_buys = [(adj(curr['MA5']), "5일선"), (adj(curr['MA10']), "10일선"), (adj(curr['MA20']), "20일선")]
@@ -287,9 +299,7 @@ def get_darwin_strategy(df, buy_price=0):
     final_buys.sort(key=lambda x: x[0], reverse=True)
     est_avg = int(sum([p[0] for p in final_buys]) / 3)
     
-    # 상태 결정 (매도 신호 우선)
     status = {"type": "💤 관망", "color": "#78909c", "msg": "대기", "alert": False}
-    
     if sell_score >= 50:
         status = {"type": "🔴 매도 경고", "color": "#d32f2f", "msg": f"{sell_reasons[0] if sell_reasons else '위험'} 발생", "alert": True}
     elif buy_price > 0:
@@ -317,7 +327,7 @@ with st.sidebar:
     krx_list, list_src = get_safe_stock_listing()
     st.markdown(f'<div class="list-box">📋 {list_src}</div>', unsafe_allow_html=True)
 
-    st.title("🛡️ V71.1 Smart Exit")
+    st.title("🛡️ V71.2 Data Shield")
     
     with st.expander("⚙️ 설정 및 자동화", expanded=True):
         tg_token = st.text_input("Bot Token", type="password")
@@ -373,7 +383,7 @@ with tabs[0]: # 대시보드
         else: time.sleep(refresh_min * 60); st.rerun()
 
 with tabs[1]: # 스캐너
-    if st.button("🛡️ 스마트 스캔") or (auto_refresh and (not only_market_time or is_market_open)):
+    if st.button("🛡️ 쉴드 스캔") or (auto_refresh and (not only_market_time or is_market_open)):
         if auto_refresh: st.info(f"🔄 자동 스캔 중... (주기: {refresh_min}분)")
         
         targets = krx_list[krx_list['Marcap'] >= min_m].sort_values('Marcap', ascending=False).head(50)
@@ -403,13 +413,15 @@ with tabs[1]: # 스캐너
         for d in top_picks:
             s = d['strat']
             reasons_html = "".join([f"<span class='hit-tag'>✅ {r}</span>" for r in s['reasons']])
+            sell_reasons_html = "".join([f"<span class='exit-alert'>🚨 {r}</span>" for r in s['sell_reasons']])
+            
             st.markdown(f"""
                 <div class="scanner-card">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div><h3 style="margin:0;">{d['name']}</h3><span class="current-price">{d['cp']:,}원</span><span class="pro-tag" style="margin-left:5px;">MVWAP: {int(s['mvwap']):,}</span></div>
                         <div style="text-align:right;"><span class="ai-badge">AI: {s['ai']}%</span><span style="font-size:1.1em; font-weight:bold; color:#2e7d32; margin-left:5px;">Score: {s['score']}</span><br><span class="mode-badge" style="font-size:0.8em; margin-top:5px; display:inline-block;">{s['logic']}</span></div>
                     </div>
-                    <div style="margin:5px 0;">{reasons_html}</div>
+                    <div style="margin:5px 0;">{reasons_html}</div><div>{sell_reasons_html}</div>
                     <div style="margin: 10px 0; display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
                         <div class="buy-box"><b>🔵 Smart Entry</b><br>1차: <b>{s['buy'][0][0]:,}원</b> <span class="logic-tag">{s['buy'][0][1]}</span><br>2차: <b>{s['buy'][1][0]:,}원</b> <span class="logic-tag">{s['buy'][1][1]}</span><br>3차: <b>{s['buy'][2][0]:,}원</b> <span class="logic-tag">{s['buy'][2][1]}</span><div class="avg-text">예상 평단: {s['avg']:,}원</div></div>
                         <div class="sell-box"><b>🔴 Smart Exit</b><br>1차: {s['sell'][0][0]:,}원 <span class="logic-tag">{s['sell'][0][1]}</span><br>2차: {s['sell'][1][0]:,}원 <span class="logic-tag">{s['sell'][1][1]}</span><br>3차: {s['sell'][2][0]:,}원 <span class="logic-tag">{s['sell'][2][1]}</span></div>
@@ -421,7 +433,7 @@ with tabs[1]: # 스캐너
         else: time.sleep(refresh_min * 60); st.rerun()
 
 with tabs[2]: # 5년 검증
-    st.subheader("🧬 5년 진화 성적표 (Smart Exit)")
+    st.subheader("🧬 5년 진화 성적표 (Data Shield)")
     status_text = st.empty()
     if st.button("🚀 5년 데이터 검증 시작"):
         pf = get_portfolio_gsheets()
@@ -476,7 +488,7 @@ with tabs[3]: # AI 리포트
                 send_telegram_msg(tg_token, tg_id, msg); st.success("전송 완료")
             
             reasons_html = "".join([f"<span class='hit-tag'>✅ {r}</span>" for r in res['reasons']])
-            sell_reasons_html = "".join([f"<span class='exit-alert'>🚨 {r}</span>" for r in res['sell_reasons']]) # 매도 경고 표시
+            sell_reasons_html = "".join([f"<span class='exit-alert'>🚨 {r}</span>" for r in res['sell_reasons']])
             
             buy_html = f"""<div class="buy-box"><b>🔵 Smart Entry</b><br>1차: <b>{res['buy'][0][0]:,}원</b> ({res['buy'][0][1]})<br>2차: <b>{res['buy'][1][0]:,}원</b> ({res['buy'][1][1]})<br>3차: <b>{res['buy'][2][0]:,}원</b> ({res['buy'][2][1]})<div class="avg-text">예상 평단: {res['avg']:,}원</div></div>"""
             sell_html = f"""<div class="sell-box"><b>🔴 Smart Exit</b><br>1차: <b>{res['sell'][0][0]:,}원</b> ({res['sell'][0][1]})<br>2차: <b>{res['sell'][1][0]:,}원</b> ({res['sell'][1][1]})<br>3차: <b>{res['sell'][2][0]:,}원</b> ({res['sell'][2][1]})</div>"""
