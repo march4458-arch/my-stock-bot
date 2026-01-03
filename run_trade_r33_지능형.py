@@ -24,7 +24,7 @@ def check_market_open():
     end_time = datetime.time(15, 30)
     return start_time <= now.time() <= end_time
 
-st.set_page_config(page_title="AI Master V69.4 Transparent", page_icon="📡", layout="wide")
+st.set_page_config(page_title="AI Master V69.5 Complete", page_icon="📡", layout="wide")
 
 st.markdown("""
     <style>
@@ -77,17 +77,12 @@ def get_data_safe(code, days=2000):
     except: pass
     return None
 
-# [NEW] 리스팅 소스 확인 기능 추가
 @st.cache_data(ttl=86400)
 def get_safe_stock_listing():
-    # 1. KRX 전체 시도
     try:
-        df = fdr.StockListing('KRX') # KOSPI+KOSDAQ 통합
-        if not df.empty:
-            return df, "⚡ KRX Live (전체)"
+        df = fdr.StockListing('KRX')
+        if not df.empty: return df, "⚡ KRX Live (전체)"
     except: pass
-    
-    # 2. 실패 시 백업 리스트 (Fallback)
     fb = [['005930','삼성전자'],['000660','SK하이닉스'],['373220','LG에너지솔루션'],['207940','삼성바이오로직스'],['005380','현대차'],['000270','기아'],['005490','POSCO홀딩스'],['035420','NAVER'],['006400','삼성SDI'],['051910','LG화학'],['105560','KB금융'],['086520','에코프로'],['247540','에코프로비엠'],['042660','한화오션'],['010130','고려아연'],['034020','두산에너빌리티'],['035720','카카오'],['003670','포스코퓨처엠'],['028260','삼성물산'],['055550','신한지주']]
     return pd.DataFrame(fb, columns=['Code','Name']).assign(Marcap=10**15), "⚠️ Backup List (20개)"
 
@@ -177,7 +172,7 @@ def get_all_indicators(df):
     return df
 
 # ==========================================
-# 🧠 3. Sniper 전략 (V69.3 Logic)
+# 🧠 3. Sniper 전략 (V69.3 Strict Logic)
 # ==========================================
 def get_darwin_strategy(df, buy_price=0):
     if df is None: return None
@@ -269,15 +264,13 @@ with st.sidebar:
     if is_market_open: st.markdown('<div class="status-open">🟢 KOSPI/KOSDAQ 장중</div>', unsafe_allow_html=True)
     else: st.markdown('<div class="status-closed">🔴 정규장 마감 (휴장)</div>', unsafe_allow_html=True)
     
-    # [NEW] 소스 컨테이너
     source_container = st.empty()
     source_container.markdown('<div class="source-box">📡 Ready</div>', unsafe_allow_html=True)
     
-    # [NEW] 리스팅 소스 확인
     krx_list, list_src = get_safe_stock_listing()
     st.markdown(f'<div class="list-box">📋 {list_src}</div>', unsafe_allow_html=True)
 
-    st.title("📡 V69.4 Transparent")
+    st.title("📡 V69.5 Complete")
     
     with st.expander("⚙️ 설정 및 자동화", expanded=True):
         tg_token = st.text_input("Bot Token", type="password")
@@ -336,7 +329,6 @@ with tabs[1]: # 스캐너
     if st.button("📡 투명 스캔") or (auto_refresh and (not only_market_time or is_market_open)):
         if auto_refresh: st.info(f"🔄 자동 스캔 중... (주기: {refresh_min}분)")
         
-        # [NEW] 투명 리스트 사용
         targets = krx_list[krx_list['Marcap'] >= min_m].sort_values('Marcap', ascending=False).head(50)
         
         found, prog = [], st.progress(0)
@@ -381,14 +373,55 @@ with tabs[1]: # 스캐너
         if only_market_time and not is_market_open: pass
         else: time.sleep(refresh_min * 60); st.rerun()
 
-with tabs[2]: # 5년 검증
-    st.subheader("🧬 5년 진화 성적표")
+with tabs[2]: # 5년 검증 (코드 완전 복구)
+    st.subheader("🧬 5년 진화 성적표 (Sniper Logic)")
     if st.button("🚀 5년 데이터 검증 시작"):
-        # (검증 코드 동일)
-        # 리스트 소스는 krx_list 사용
-        targets = list(set(pf['Code'].tolist() + krx_list.head(5)['Code'].tolist()))[:10]
-        # (이하 생략 - 위와 동일)
-        st.info("검증 로직 실행")
+        # 검증 대상: 포트폴리오 종목 + KRX 상위 5개
+        pf = get_portfolio_gsheets()
+        sample_codes = pf['Code'].tolist() if not pf.empty else []
+        top5_codes = krx_list.head(5)['Code'].tolist()
+        targets = list(set(sample_codes + top5_codes))[:10]
+        
+        results = []
+        prog = st.progress(0)
+        
+        for idx, code in enumerate(targets):
+            full_df_raw = get_data_safe(code, days=2000)
+            if full_df_raw is not None and len(full_df_raw) > 300:
+                full_df = get_all_indicators(full_df_raw)
+                if full_df is not None:
+                    # 과거 시점으로 돌아가며 매매 시뮬레이션
+                    for i in range(240, 0, -1): # 최근 5년(약 240주)
+                        past_idx = - (i * 5) # 1주일 단위로 이동
+                        if abs(past_idx) < len(full_df) - 60 and abs(past_idx) < len(full_df):
+                            past_df = full_df.iloc[:past_idx]
+                            future_df = full_df.iloc[past_idx:]
+                            
+                            if len(future_df) >= 5: # 미래 1주일 데이터가 있다면
+                                res = get_darwin_strategy(past_df)
+                                if res['score'] >= 60: # Sniper 기준 (60점 이상 진입)
+                                    entry = past_df['Close'].iloc[-1]
+                                    exit_p = future_df['Close'].iloc[4] # 5일 후 청산 가정
+                                    results.append({
+                                        "Date": past_df.index[-1],
+                                        "Win": 1 if exit_p > entry else 0,
+                                        "Count": 1
+                                    })
+            prog.progress((idx+1)/len(targets))
+            
+        if results:
+            df_res = pd.DataFrame(results).sort_values('Date')
+            df_res['Win_Rate'] = (df_res['Win'].cumsum() / df_res['Count'].cumsum() * 100)
+            
+            c1, c2 = st.columns(2)
+            c1.metric("총 검증 횟수", f"{len(df_res)}회")
+            c2.metric("누적 승률", f"{df_res['Win_Rate'].iloc[-1]:.1f}%")
+            
+            fig = px.line(df_res, x='Date', y='Win_Rate', title="5년 승률 변화 (Sniper Logic)", markers=False)
+            fig.add_hline(y=50, line_dash="dot", line_color="gray", annotation_text="Break-even")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.error("검증할 데이터가 부족합니다.")
 
 with tabs[3]: # AI 리포트
     if not pf.empty:
@@ -401,7 +434,7 @@ with tabs[3]: # AI 리포트
             res = get_darwin_strategy(df_ai, row['Buy_Price'])
             cp = df_ai['Close'].iloc[-1]
             if st.button("📡 전략 전송"):
-                msg = f"🎯 <b>[{sel}] 전략</b>\n💰 {cp:,}원\n\n🔵 1차: {res['buy'][0][0]:,}원\n🔴 1차: {res['sell'][0][0]:,}원\n💡 평단: {res['avg']:,}원"
+                msg = f"🎯 <b>[{sel}] Sniper 전략</b>\n💰 {cp:,}원\n\n🔵 1차: {res['buy'][0][0]:,}원\n🔴 1차: {res['sell'][0][0]:,}원\n💡 평단: {res['avg']:,}원"
                 send_telegram_msg(tg_token, tg_id, msg); st.success("전송 완료")
             
             reasons_html = "".join([f"<span class='hit-tag'>✅ {r}</span>" for r in res['reasons']])
@@ -419,7 +452,6 @@ with tabs[4]: # 관리
     with st.form("add"):
         c1, c2, c3 = st.columns(3); n, p, q = c1.text_input("종목명"), c2.number_input("평단가"), c3.number_input("수량")
         if st.form_submit_button("등록"):
-            # [NEW] 투명 리스트 사용
             m = krx_list[krx_list['Name']==n]
             if not m.empty:
                 new = pd.DataFrame([[m.iloc[0]['Code'], n, p, q]], columns=['Code', 'Name', 'Buy_Price', 'Qty'])
