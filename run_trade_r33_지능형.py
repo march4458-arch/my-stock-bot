@@ -28,7 +28,7 @@ def check_market_open():
     
     return start_time <= current_time <= end_time
 
-st.set_page_config(page_title="AI Master V68.6 Market Time", page_icon="🎩", layout="wide")
+st.set_page_config(page_title="AI Master V68.7 UI Fix", page_icon="🎩", layout="wide")
 
 st.markdown("""
     <style>
@@ -114,11 +114,15 @@ def get_all_indicators(df):
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)
     close = df['Close']; high = df['High']; low = df['Low']; vol = df['Volume']
     
-    # Basic
+    # 1. Basic & ATR (True Range Fix included)
     df['MA20'] = close.rolling(20).mean()
-    df['ATR'] = (high - low).rolling(14).mean()
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    df['TR'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    df['ATR'] = df['TR'].rolling(14).mean()
     
-    # Pro Indicators
+    # 2. Pro Indicators
     tp = (high + low + close) / 3
     df['MVWAP'] = (tp * vol).rolling(20).sum() / (vol.rolling(20).sum() + 1e-9)
     
@@ -131,7 +135,7 @@ def get_all_indicators(df):
     df['BB_Width'] = (df['BB_Up'] - df['BB_Lo']) / ma_bb
     df['Squeeze'] = df['BB_Width'] < df['BB_Width'].rolling(120).min() * 1.1
 
-    # Standard
+    # 3. Standard
     df['Is_Impulse'] = (close > df['Open'] * 1.03) & (vol > vol.rolling(20).mean())
     ob_price = 0
     for i in range(len(df)-2, len(df)-60, -1):
@@ -163,7 +167,7 @@ def get_all_indicators(df):
     return df
 
 # ==========================================
-# 🧠 3. Pro-Quant 전략 엔진
+# 🧠 3. Pro-Quant 전략 (Safety Lock)
 # ==========================================
 def get_darwin_strategy(df, buy_price=0):
     if df is None: return None
@@ -205,7 +209,10 @@ def get_darwin_strategy(df, buy_price=0):
         if curr['RSI'] < 35: score += 20
         if cp <= curr['BB_Lo']: score += 20
 
-    score += (ai_prob * 0.4)
+    # Safety Lock Logic
+    if ai_prob >= 60: score += (ai_prob * 0.4)
+    elif ai_prob <= 40: score -= 20
+    else: score = score * 0.8
 
     def adj(p):
         if np.isnan(p) or p <= 0: return 0
@@ -250,20 +257,17 @@ def get_darwin_strategy(df, buy_price=0):
     return {"buy": final_buys, "sell": sell_pts, "avg": est_avg, "score": int(score), "status": status, "ai": ai_prob, "logic": logic_mode, "top_feat": top_feature, "mvwap": curr['MVWAP']}
 
 # ==========================================
-# 🖥️ 4. 메인 UI (Market Time Auto-Run)
+# 🖥️ 4. 메인 UI (Auto-Run + UI Fixed)
 # ==========================================
 with st.sidebar:
     now = get_now_kst()
     is_market_open = check_market_open()
     
-    # 1. 실시간 시계 & 마켓 상태
     st.markdown(f'<div class="clock-box">⏰ {now.strftime("%H:%M:%S")}</div>', unsafe_allow_html=True)
-    if is_market_open:
-        st.markdown('<div class="status-open">🟢 KOSPI/KOSDAQ 장중</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="status-closed">🔴 정규장 마감 (휴장)</div>', unsafe_allow_html=True)
+    if is_market_open: st.markdown('<div class="status-open">🟢 KOSPI/KOSDAQ 장중</div>', unsafe_allow_html=True)
+    else: st.markdown('<div class="status-closed">🔴 정규장 마감 (휴장)</div>', unsafe_allow_html=True)
         
-    st.title("🎩 V68.6 Market Time")
+    st.title("🎩 V68.7 UI Fix")
     
     with st.expander("⚙️ 설정 및 자동화", expanded=True):
         tg_token = st.text_input("Bot Token", type="password")
@@ -273,14 +277,12 @@ with st.sidebar:
         report_time = st.time_input("발송 시간", datetime.time(16, 0))
         scanner_alert = st.checkbox("📢 스캔 자동 알림", value=True)
         st.markdown("---")
-        # [AUTO-RUN OPTIONS]
         auto_refresh = st.checkbox("🔄 자동 갱신 (PC)", value=False)
         only_market_time = st.checkbox("⏰ 정규장에만 실행", value=True)
         refresh_min = st.slider("주기(분)", 1, 60, 5)
     
     min_m = st.number_input("최소 시총(억)", value=3000) * 100000000
     
-    # Auto Report
     if auto_report and now.hour == report_time.hour and now.minute == report_time.minute:
         pf_rep = get_portfolio_gsheets()
         if not pf_rep.empty:
@@ -310,22 +312,13 @@ with tabs[0]: # 대시보드
         c3.metric("손익", f"{int(t_eval-t_buy):,}원")
         if dash_list: st.plotly_chart(px.bar(pd.DataFrame(dash_list), x='종목', y='수익', color='상태', template="plotly_white"), use_container_width=True)
     
-    # [SMART AUTO-RUN LOGIC]
     if auto_refresh:
-        should_run = True
-        if only_market_time and not is_market_open:
-            should_run = False
-            st.warning("🌙 정규장 운영 시간이 아니므로 자동 갱신을 일시 정지합니다.")
-        
-        if should_run:
-            time.sleep(refresh_min * 60)
-            st.rerun()
+        if only_market_time and not is_market_open: st.warning("🌙 정규장 운영 시간이 아니므로 자동 갱신을 일시 정지합니다.")
+        else: time.sleep(refresh_min * 60); st.rerun()
 
 with tabs[1]: # 스캐너
-    # 버튼 클릭 또는 (자동갱신 켜짐 & (장운영중 or 강제실행))
     if st.button("🎩 Pro-Quant 스캔") or (auto_refresh and (not only_market_time or is_market_open)):
         if auto_refresh: st.info(f"🔄 자동 스캔 중... (주기: {refresh_min}분)")
-        
         krx = get_safe_stock_listing(); targets = krx[krx['Marcap'] >= min_m].sort_values('Marcap', ascending=False).head(50)
         found, prog = [], st.progress(0)
         with ThreadPoolExecutor(max_workers=5) as ex:
@@ -352,13 +345,18 @@ with tabs[1]: # 스캐너
             st.markdown(f"""
                 <div class="scanner-card">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div><h3 style="margin:0;">{d['name']}</h3><span class="current-price">{d['cp']:,}원</span></div>
+                        <div>
+                            <h3 style="margin:0;">{d['name']}</h3>
+                            <span class="current-price">{d['cp']:,}원</span>
+                            <span class="pro-tag" style="margin-left:5px;">MVWAP: {s['mvwap']:,}</span>
+                        </div>
                         <div style="text-align:right;">
-                            <span class="mode-badge">{s['logic']}</span> <span class="ai-badge">AI: {s['ai']}%</span><br>
-                            <span class="pro-tag">MVWAP: {s['mvwap']:,}</span>
+                            <span class="ai-badge">AI: {s['ai']}%</span> 
+                            <span style="font-size:1.1em; font-weight:bold; color:#4a148c; margin-left:5px;">Score: {s['score']}</span><br>
+                            <span class="mode-badge" style="font-size:0.8em; margin-top:5px; display:inline-block;">{s['logic']}</span>
                         </div>
                     </div>
-                    <div style="margin: 15px 0; display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+                    <div style="margin: 10px 0; display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
                         <div class="buy-box">
                             <b>🔵 Smart Entry</b><br>
                             1차: <b>{s['buy'][0][0]:,}원</b> <span class="logic-tag">{s['buy'][0][1]}</span><br>
@@ -375,18 +373,11 @@ with tabs[1]: # 스캐너
                     </div>
                 </div>""", unsafe_allow_html=True)
     
-    # [SMART AUTO-RUN LOGIC]
     if auto_refresh:
-        should_run = True
-        if only_market_time and not is_market_open:
-            should_run = False
-            st.warning("🌙 정규장 운영 시간이 아니므로 자동 갱신을 일시 정지합니다.")
-        
-        if should_run:
-            time.sleep(refresh_min * 60)
-            st.rerun()
+        if only_market_time and not is_market_open: pass
+        else: time.sleep(refresh_min * 60); st.rerun()
 
-with tabs[2]: # 5년 검증 (V67.4 Optimized & Fixed)
+with tabs[2]: # 5년 검증
     st.subheader("🧬 5년 진화 성적표 (Pro Logic Tested)")
     if st.button("🚀 5년 데이터 검증 시작"):
         pf = get_portfolio_gsheets()
@@ -399,7 +390,7 @@ with tabs[2]: # 5년 검증 (V67.4 Optimized & Fixed)
         for idx, code in enumerate(targets):
             full_df_raw = get_data_safe(code, days=2000)
             if full_df_raw is not None and len(full_df_raw) > 300:
-                full_df = get_all_indicators(full_df_raw) # Calculate ALL indicators first
+                full_df = get_all_indicators(full_df_raw)
                 if full_df is not None:
                     for i in range(240, 0, -1):
                         past_idx = - (i * 5)
