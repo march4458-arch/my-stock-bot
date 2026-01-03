@@ -17,7 +17,7 @@ from sklearn.ensemble import RandomForestClassifier
 def get_now_kst():
     return datetime.datetime.now(timezone(timedelta(hours=9)))
 
-st.set_page_config(page_title="AI Master V67.2 Ultimate", page_icon="🧬", layout="wide")
+st.set_page_config(page_title="AI Master V67.2.1 Fix", page_icon="🧬", layout="wide")
 
 st.markdown("""
     <style>
@@ -34,9 +34,7 @@ st.markdown("""
     .logic-tag { font-size: 0.8em; color: #555; background-color: rgba(255,255,255,0.7); padding: 2px 5px; border-radius: 4px; margin-left: 5px; }
     .mode-badge { background-color: #263238; color: #00e676; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     .ai-badge { background-color: #6200ea; color: white; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
-    .win-badge { background-color: #e8f5e9; color: #2e7d32; padding: 3px 8px; border-radius: 6px; font-weight: bold; }
     
-    /* 실시간 시계 스타일 */
     .clock-box { font-size: 1.2em; font-weight: bold; color: #333; text-align: center; margin-bottom: 10px; padding: 10px; background: #e0f7fa; border-radius: 8px; }
     </style>
     """, unsafe_allow_html=True)
@@ -234,17 +232,14 @@ def get_darwin_strategy(df, buy_price=0):
     return {"buy": final_buys, "sell": sell_pts, "avg": est_avg_price, "score": int(score), "status": status, "ai": ai_prob, "logic": logic_mode, "top_feat": top_feature, "ob": curr['OB']}
 
 # ==========================================
-# 🖥️ 4. 메인 UI (Integrated)
+# 🖥️ 4. 메인 UI (Alerts & Fix)
 # ==========================================
 with st.sidebar:
-    # 실시간 시계
     now = get_now_kst()
     st.markdown(f'<div class="clock-box">⏰ {now.strftime("%H:%M:%S")}</div>', unsafe_allow_html=True)
-    
-    st.title("📡 V67.2 Ultimate")
+    st.title("📡 V67.2.1 Fix")
     tg_token = st.text_input("Bot Token", type="password")
     tg_id = st.text_input("Chat ID")
-    
     scanner_alert = st.checkbox("📢 스캔 결과 자동 전송", value=True)
     auto_report = st.checkbox("16시 마감 리포트", value=True)
     min_m = st.number_input("최소 시총(억)", value=3000) * 100000000
@@ -278,7 +273,7 @@ with tabs[0]: # 대시보드
         c3.metric("손익", f"{int(t_eval-t_buy):,}원")
         if dash_list: st.plotly_chart(px.bar(pd.DataFrame(dash_list), x='종목', y='수익', color='상태', template="plotly_white"), use_container_width=True)
 
-with tabs[1]: # 스캐너 (Telegram Alert)
+with tabs[1]: # 스캐너
     if st.button("🧬 Darwin Evolution 스캔"):
         krx = get_safe_stock_listing(); targets = krx[krx['Marcap'] >= min_m].sort_values('Marcap', ascending=False).head(50)
         found, prog = [], st.progress(0)
@@ -293,8 +288,6 @@ with tabs[1]: # 스캐너 (Telegram Alert)
                 prog.progress((i+1)/len(targets))
         
         top_picks = sorted(found, key=lambda x: x['score'], reverse=True)[:15]
-        
-        # 텔레그램 자동 전송
         if scanner_alert and top_picks and tg_token and tg_id:
             msg = f"🚀 <b>[AI 스캔 Top 5]</b> ({now.strftime('%H:%M')})\n\n"
             for item in top_picks[:5]:
@@ -328,10 +321,8 @@ with tabs[1]: # 스캐너 (Telegram Alert)
                     </div>
                 </div>""", unsafe_allow_html=True)
 
-with tabs[2]: # 🧬 진화 검증 (Time Machine)
+with tabs[2]: # 🧬 진화 검증 (Fix: Indicator calc included)
     st.subheader("🧬 Darwin 진화 성적표 (Time Machine)")
-    st.info("💡 과거 데이터를 타임머신으로 분석하여 AI의 실력을 검증합니다.")
-    
     if st.button("🚀 과거 데이터 검증 시작"):
         pf = get_portfolio_gsheets()
         sample_codes = pf['Code'].tolist() if not pf.empty else []
@@ -344,13 +335,16 @@ with tabs[2]: # 🧬 진화 검증 (Time Machine)
         for idx, code in enumerate(targets):
             full_df = get_data_safe(code, days=365)
             if full_df is not None and len(full_df) > 150:
-                for i in range(24, 0, -1): # 24주 전부터 검사
+                for i in range(24, 0, -1):
                     past_date_idx = - (i * 5)
                     if abs(past_date_idx) < len(full_df) - 60:
-                        past_df = full_df.iloc[:past_date_idx]
+                        past_df_raw = full_df.iloc[:past_date_idx]
                         future_df = full_df.iloc[past_date_idx:]
                         
-                        if len(future_df) >= 5:
+                        # [FIX] Calculate indicators for the past slice
+                        past_df = get_all_indicators(past_df_raw)
+                        
+                        if past_df is not None and len(future_df) >= 5:
                             res = get_darwin_strategy(past_df)
                             if res['score'] >= 50:
                                 entry = past_df['Close'].iloc[-1]
@@ -373,7 +367,7 @@ with tabs[2]: # 🧬 진화 검증 (Time Machine)
         else:
             st.error("데이터 부족")
 
-with tabs[3]: # AI 리포트 (수동 전송)
+with tabs[3]: # AI 리포트
     if not pf.empty:
         sel = st.selectbox("종목 선택", pf['Name'].unique())
         row = pf[pf['Name'] == sel].iloc[0]
@@ -387,7 +381,6 @@ with tabs[3]: # AI 리포트 (수동 전송)
                 send_telegram_msg(tg_token, tg_id, msg)
                 st.success("전송 완료")
             
-            # 전략 패널 (무조건 표시)
             buy_html = f"""<div class="buy-box"><b>🔵 3분할 매수</b><br>1차: <b>{res['buy'][0][0]:,}원</b> ({res['buy'][0][1]})<br>2차: <b>{res['buy'][1][0]:,}원</b> ({res['buy'][1][1]})<br>3차: <b>{res['buy'][2][0]:,}원</b> ({res['buy'][2][1]})<div class="avg-text">예상 평단: {res['avg']:,}원</div></div>"""
             sell_html = f"""<div class="sell-box"><b>🔴 3분할 매도</b><br>1차: <b>{res['sell'][0][0]:,}원</b> ({res['sell'][0][1]})<br>2차: <b>{res['sell'][1][0]:,}원</b> ({res['sell'][1][1]})<br>3차: <b>{res['sell'][2][0]:,}원</b> ({res['sell'][2][1]})</div>"""
             
