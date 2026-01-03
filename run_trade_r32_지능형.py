@@ -17,7 +17,7 @@ from sklearn.ensemble import RandomForestClassifier
 def get_now_kst():
     return datetime.datetime.now(timezone(timedelta(hours=9)))
 
-st.set_page_config(page_title="AI Master V66.2 Action", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="AI Master V66.2.1", page_icon="🛡️", layout="wide")
 
 st.markdown("""
     <style>
@@ -25,19 +25,18 @@ st.markdown("""
     .metric-card { background: white; padding: 20px; border-radius: 12px; border-left: 5px solid #6200ea; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
     .scanner-card { padding: 20px; border-radius: 15px; border: 1px solid #e0e0e0; margin-bottom: 15px; background-color: white; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
     
-    /* 매수/매도 박스 디자인 강화 */
     .buy-box { background-color: #e3f2fd; padding: 12px; border-radius: 8px; border: 1px solid #90caf9; color: #0d47a1; }
     .sell-box { background-color: #ffebee; padding: 12px; border-radius: 8px; border: 1px solid #ef9a9a; color: #b71c1c; }
+    .avg-box { background-color: #f3e5f5; padding: 10px; border-radius: 8px; border: 1px solid #ce93d8; color: #4a148c; font-weight: bold; text-align: center; margin-top: 10px;}
     
     .price-tag { font-weight: bold; font-size: 1.1em; }
     .logic-tag { font-size: 0.8em; color: #555; margin-left: 5px; background-color: rgba(255,255,255,0.5); padding: 2px 5px; border-radius: 4px;}
-    
     .mode-badge { background-color: #263238; color: #00e676; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     .ai-badge { background-color: #6200ea; color: white; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- [안정적인 데이터 로딩 (Dual Engine)] ---
+# --- [Dual Engine Data Loader] ---
 @st.cache_data(ttl=3600)
 def get_data_safe(code, days=365):
     start_date = (get_now_kst() - timedelta(days=days)).strftime('%Y-%m-%d')
@@ -60,7 +59,6 @@ def get_safe_stock_listing():
         df = pd.concat([kospi, kosdaq])
         if not df.empty: return df
     except: pass
-    # Backup 20
     fb = [['005930','삼성전자'],['000660','SK하이닉스'],['373220','LG에너지솔루션'],['207940','삼성바이오로직스'],['005380','현대차'],['000270','기아'],['005490','POSCO홀딩스'],['035420','NAVER'],['035720','카카오'],['006400','삼성SDI'],['051910','LG화학'],['003670','포스코퓨처엠'],['028260','삼성물산'],['105560','KB금융'],['055550','신한지주'],['086520','에코프로'],['247540','에코프로비엠'],['042660','한화오션'],['010130','고려아연'],['034020','두산에너빌리티']]
     return pd.DataFrame(fb, columns=['Code','Name']).assign(Marcap=10**15)
 
@@ -87,7 +85,7 @@ def send_telegram_msg(token, chat_id, message):
         except: pass
 
 # ==========================================
-# 📊 2. 지표 엔진 (Full Features)
+# 📊 2. 지표 엔진
 # ==========================================
 def calc_stoch(df, n, m, t):
     l, h = df['Low'].rolling(n).min(), df['High'].rolling(n).max()
@@ -103,7 +101,7 @@ def get_all_indicators(df):
     df['MA20'] = close.rolling(20).mean()
     df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
     
-    # SMC (Order Block)
+    # SMC (OB)
     df['Is_Impulse'] = (df['Close'] > df['Open'] * 1.03) & (df['Volume'] > df['Volume'].rolling(20).mean())
     ob_price = 0
     for i in range(len(df)-2, len(df)-60, -1):
@@ -128,7 +126,7 @@ def get_all_indicators(df):
     exp1 = close.ewm(span=12, adjust=False).mean(); exp2 = close.ewm(span=26, adjust=False).mean()
     df['MACD_Osc'] = (exp1 - exp2) - (exp1 - exp2).ewm(span=9, adjust=False).mean()
 
-    # CCI & MFI & ADX
+    # CCI, MFI, ADX
     tp = (df['High'] + df['Low'] + close) / 3
     mad = tp.rolling(14).apply(lambda x: (x - x.mean()).abs().mean())
     df['CCI'] = (tp - tp.rolling(14).mean()) / (0.015 * mad + 1e-9)
@@ -149,13 +147,13 @@ def get_all_indicators(df):
     return df
 
 # ==========================================
-# 🧠 3. Darwin 전략 (가격 계산 명확화)
+# 🧠 3. Darwin 전략 (평단가 계산 추가)
 # ==========================================
 def get_darwin_strategy(df, buy_price=0):
     if df is None: return None
     curr = df.iloc[-1]; cp = curr['Close']; atr = curr['ATR']
     
-    # 1. AI Feature Selection
+    # 1. Feature Selection
     df['BB_Dist'] = (curr['BB1_Lo'] - cp) / cp 
     data_ml = df.copy()[['RSI','SNOW_L','CCI','MFI','ADX','Vol_Z', 'BB_Dist']].dropna()
     features = ['RSI','SNOW_L','CCI','MFI','ADX','Vol_Z', 'BB_Dist']
@@ -180,7 +178,6 @@ def get_darwin_strategy(df, buy_price=0):
     score = 0
     if (curr['SNOW_L'] < 30) or (curr['RSI'] < 35): score += 10
     
-    # Mode Logic
     if logic_mode == "🔥 Trend Mode":
         if curr['ADX'] > 20: score += 10
         if cp <= curr['BB1_Lo'] * 1.02: score += 30
@@ -200,13 +197,12 @@ def get_darwin_strategy(df, buy_price=0):
     
     score += (ai_prob * 0.4)
 
-    # 3. 3-Split Price Calculation (가격 태깅)
+    # 3. 3-Split Calculation
     def adj(p):
         if np.isnan(p) or p <= 0: return 0
         t = 1 if p<2000 else 5 if p<5000 else 10 if p<20000 else 50 if p<50000 else 100 if p<200000 else 500
         return int(round(p/t)*t)
     
-    # 후보군 생성 (가격, 이름)
     candidates = [
         (adj(curr['POC']), "POC"),
         (adj(curr['OB']), "OB"),
@@ -214,24 +210,24 @@ def get_darwin_strategy(df, buy_price=0):
         (adj(curr['BB1_Lo']), "BB")
     ]
     
-    # 모드에 따른 우선순위 재정렬
     if logic_mode == "🔥 Trend Mode": candidates.sort(key=lambda x: (x[1] != 'BB', x[1] != 'Fibo', -x[0]))
     elif logic_mode == "🏛️ Whale Mode": candidates.sort(key=lambda x: (x[1] != 'OB', x[1] != 'POC', -x[0]))
-    else: candidates.sort(key=lambda x: x[0], reverse=True) # 기본: 높은 가격 우선
+    else: candidates.sort(key=lambda x: x[0], reverse=True)
     
-    # 현재가 이하 필터링
     valid_buys = [x for x in candidates if x[0] <= cp]
     
-    # 최종 3분할 타점 (가격, 라벨)
     final_buys = []
     if not valid_buys: 
         final_buys = [(adj(cp), "현재가"), (adj(cp*0.95), "-5%"), (adj(cp*0.90), "-10%")]
     elif len(valid_buys) == 1:
-        final_buys = [valid_buys[0], (adj(valid_buys[0][0]*0.95), "Support-5%"), (adj(valid_buys[0][0]*0.90), "Support-10%")]
+        final_buys = [valid_buys[0], (adj(valid_buys[0][0]*0.95), "Supp-5%"), (adj(valid_buys[0][0]*0.90), "Supp-10%")]
     elif len(valid_buys) == 2:
         final_buys = [valid_buys[0], valid_buys[1], (adj(valid_buys[1][0]*0.95), "2nd-5%")]
     else:
         final_buys = valid_buys[:3]
+
+    # [NEW] 예상 평단가 (1:1:1 비중 가정)
+    est_avg_price = int(sum([p[0] for p in final_buys]) / 3)
 
     sell_pts = [(adj(curr['BB1_Up']), "BB상단"), (adj(cp + atr*3), "ATR x3"), (adj(cp + atr*5), "ATR x5")]
     
@@ -239,16 +235,16 @@ def get_darwin_strategy(df, buy_price=0):
     if buy_price > 0:
         y = (cp - buy_price) / buy_price * 100
         if cp >= sell_pts[0][0]: status = {"type": "💰 익절", "color": "#28a745", "msg": "수익권 도달", "alert": True}
-        elif y < -3 and score >= 45: status = {"type": "❄️ 물타기", "color": "#00d2ff", "msg": f"추가매수 적기({logic_mode})", "alert": True}
-        elif y > 2 and ai_prob > 60: status = {"type": "🔥 불타기", "color": "#ff4b4b", "msg": "추세추종 가속", "alert": True}
+        elif y < -3 and score >= 45: status = {"type": "❄️ 물타기", "color": "#00d2ff", "msg": f"추매({logic_mode})", "alert": True}
+        elif y > 2 and ai_prob > 60: status = {"type": "🔥 불타기", "color": "#ff4b4b", "msg": "추세가속", "alert": True}
 
-    return {"buy": final_buys, "sell": sell_pts, "score": int(score), "status": status, "ai": ai_prob, "logic": logic_mode, "top_feat": top_feature, "ob": curr['OB']}
+    return {"buy": final_buys, "sell": sell_pts, "avg": est_avg_price, "score": int(score), "status": status, "ai": ai_prob, "logic": logic_mode, "top_feat": top_feature, "ob": curr['OB']}
 
 # ==========================================
-# 🖥️ 4. 메인 UI (Actionable View)
+# 🖥️ 4. 메인 UI
 # ==========================================
 with st.sidebar:
-    st.title("🛡️ V66.2 Darwin Action")
+    st.title("🛡️ V66.2.1 Action")
     now = get_now_kst()
     st.info(f"KST: {now.strftime('%H:%M:%S')}")
     tg_token = st.text_input("Bot Token", type="password")
@@ -285,7 +281,7 @@ with tabs[0]: # 대시보드
         c3.metric("손익", f"{int(t_eval-t_buy):,}원")
         if dash_list: st.plotly_chart(px.bar(pd.DataFrame(dash_list), x='종목', y='수익', color='상태', template="plotly_white"), use_container_width=True)
 
-with tabs[1]: # 스캐너 (명확한 3분할 가격 표시)
+with tabs[1]: # 스캐너 (명확한 3분할 및 예상평단)
     if st.button("🧬 Darwin Evolution 스캔"):
         krx = get_safe_stock_listing(); targets = krx[krx['Marcap'] >= min_m].sort_values('Marcap', ascending=False).head(50)
         found, prog = [], st.progress(0)
@@ -306,23 +302,24 @@ with tabs[1]: # 스캐너 (명확한 3분할 가격 표시)
                         <h3 style="margin:0;">{d['name']}</h3>
                         <div><span class="mode-badge">{s['logic']}</span> <span class="ai-badge">AI: {s['ai']}%</span></div>
                     </div>
-                    <div style="margin: 10px 0; display:grid; grid-template-columns: 1fr 1fr; gap:15px;">
+                    <div style="margin: 10px 0; display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
                         <div class="buy-box">
-                            <b>🔵 3분할 매수 (Support)</b><br>
-                            1차: <span class="price-tag">{s['buy'][0][0]:,}원</span> <span class="logic-tag">{s['buy'][0][1]}</span><br>
-                            2차: <span class="price-tag">{s['buy'][1][0]:,}원</span> <span class="logic-tag">{s['buy'][1][1]}</span><br>
-                            3차: <span class="price-tag">{s['buy'][2][0]:,}원</span> <span class="logic-tag">{s['buy'][2][1]}</span>
+                            <b>🔵 3분할 매수</b><br>
+                            1차: <b>{s['buy'][0][0]:,}원</b> <span class="logic-tag">{s['buy'][0][1]}</span><br>
+                            2차: <b>{s['buy'][1][0]:,}원</b> <span class="logic-tag">{s['buy'][1][1]}</span><br>
+                            3차: <b>{s['buy'][2][0]:,}원</b> <span class="logic-tag">{s['buy'][2][1]}</span>
+                            <div class="avg-box">예상 평단: {s['avg']:,}원</div>
                         </div>
                         <div class="sell-box">
-                            <b>🔴 3분할 매도 (Target)</b><br>
-                            1차: <span class="price-tag">{s['sell'][0][0]:,}원</span> <span class="logic-tag">{s['sell'][0][1]}</span><br>
-                            2차: <span class="price-tag">{s['sell'][1][0]:,}원</span> <span class="logic-tag">{s['sell'][1][1]}</span><br>
-                            3차: <span class="price-tag">{s['sell'][2][0]:,}원</span> <span class="logic-tag">{s['sell'][2][1]}</span>
+                            <b>🔴 3분할 매도</b><br>
+                            1차: {s['sell'][0][0]:,}원 <span class="logic-tag">{s['sell'][0][1]}</span><br>
+                            2차: {s['sell'][1][0]:,}원 <span class="logic-tag">{s['sell'][1][1]}</span><br>
+                            3차: {s['sell'][2][0]:,}원 <span class="logic-tag">{s['sell'][2][1]}</span>
                         </div>
                     </div>
                 </div>""", unsafe_allow_html=True)
 
-with tabs[2]: # AI 리포트 (물타기/불타기 단가 안내)
+with tabs[2]: # AI 리포트
     if not pf.empty:
         sel = st.selectbox("종목 선택", pf['Name'].unique())
         row = pf[pf['Name'] == sel].iloc[0]
@@ -330,22 +327,23 @@ with tabs[2]: # AI 리포트 (물타기/불타기 단가 안내)
         if df_ai is not None:
             res = get_darwin_strategy(df_ai, row['Buy_Price'])
             
-            # Actionable Insight
             action_msg = ""
             if "물타기" in res['status']['type']:
                 action_msg = f"""<div style="background:#e3f2fd; padding:15px; border-radius:10px; border:1px solid #90caf9;">
-                    <h4 style="margin:0 0 10px 0; color:#0d47a1;">❄️ 물타기 전략 가이드</h4>
-                    <b>추천 진입 단가:</b><br>
-                    • 1차(안전): <b>{res['buy'][0][0]:,}원</b> ({res['buy'][0][1]})<br>
-                    • 2차(적극): <b>{res['buy'][1][0]:,}원</b> ({res['buy'][1][1]})<br>
-                    • 3차(최후): <b>{res['buy'][2][0]:,}원</b> ({res['buy'][2][1]})
+                    <h4 style="margin:0 0 10px 0; color:#0d47a1;">❄️ 물타기 추천 단가</h4>
+                    • 1차: <b>{res['buy'][0][0]:,}원</b> ({res['buy'][0][1]})<br>
+                    • 2차: <b>{res['buy'][1][0]:,}원</b> ({res['buy'][1][1]})<br>
+                    • 3차: <b>{res['buy'][2][0]:,}원</b> ({res['buy'][2][1]})<br>
+                    <hr style="margin:5px 0;">
+                    <b>💡 3회 분할 매수 완료 시 예상 평단: {res['avg']:,}원</b>
                     </div>"""
             elif "불타기" in res['status']['type']:
                 action_msg = f"""<div style="background:#ffebee; padding:15px; border-radius:10px; border:1px solid #ef9a9a;">
-                    <h4 style="margin:0 0 10px 0; color:#b71c1c;">🔥 불타기(추세) 전략 가이드</h4>
-                    <b>추가 진입 단가:</b><br>
-                    • 돌파 지지: <b>{res['buy'][0][0]:,}원</b> ({res['buy'][0][1]})<br>
-                    • 눌림목: <b>{res['buy'][1][0]:,}원</b> ({res['buy'][1][1]})
+                    <h4 style="margin:0 0 10px 0; color:#b71c1c;">🔥 불타기 추천 단가</h4>
+                    • 1차: <b>{res['buy'][0][0]:,}원</b> ({res['buy'][0][1]})<br>
+                    • 2차: <b>{res['buy'][1][0]:,}원</b> ({res['buy'][1][1]})<br>
+                    <hr style="margin:5px 0;">
+                    <b>💡 분할 진입 시 예상 평단: {res['avg']:,}원</b>
                     </div>"""
             
             st.markdown(f"""<div class="metric-card" style="border-left:10px solid {res['status']['color']};">
@@ -371,12 +369,8 @@ with tabs[3]: # 백테스트
                 cash, stocks, equity = 10000000, 0, []
                 for i in range(120, len(df_bt)):
                     curr = df_bt.iloc[:i+1]; s_res = get_darwin_strategy(curr); cp = df_bt.iloc[i]['Close']
-                    # [FIX] 단순화된 백테스트 로직 (튜플 처리)
-                    buy_trigger = s_res['buy'][0][0] # 1차 매수가
-                    sell_trigger = s_res['sell'][0][0] # 1차 매도가
-                    
                     if stocks == 0 and s_res['score'] >= 50: stocks = cash // cp; cash -= (stocks * cp)
-                    elif stocks > 0 and cp >= sell_trigger: cash += (stocks * cp); stocks = 0
+                    elif stocks > 0 and cp >= s_res['sell'][0][0]: cash += (stocks * cp); stocks = 0
                     equity.append(cash + (stocks * cp))
                 st.plotly_chart(px.line(pd.DataFrame(equity, columns=['total']), y='total', title=f"{bt_name} 자산 성장"))
 
