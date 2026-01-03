@@ -17,7 +17,7 @@ from sklearn.ensemble import RandomForestClassifier
 def get_now_kst():
     return datetime.datetime.now(timezone(timedelta(hours=9)))
 
-st.set_page_config(page_title="AI Master V67.3 Custom Time", page_icon="⏰", layout="wide")
+st.set_page_config(page_title="AI Master V67.4 Deep History", page_icon="🧬", layout="wide")
 
 st.markdown("""
     <style>
@@ -35,14 +35,13 @@ st.markdown("""
     .mode-badge { background-color: #263238; color: #00e676; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     .ai-badge { background-color: #6200ea; color: white; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     
-    /* 실시간 시계 스타일 */
-    .clock-box { font-size: 1.2em; font-weight: bold; color: #333; text-align: center; margin-bottom: 15px; padding: 10px; background: #e0f7fa; border-radius: 8px; border: 1px solid #b2ebf2; }
+    .clock-box { font-size: 1.2em; font-weight: bold; color: #333; text-align: center; margin-bottom: 10px; padding: 10px; background: #e0f7fa; border-radius: 8px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- [Data Loader] ---
+# --- [Data Loader: 5년치 확보] ---
 @st.cache_data(ttl=3600)
-def get_data_safe(code, days=365):
+def get_data_safe(code, days=2000): # [UPDATE] 2000일(약 5.5년)로 확장
     start_date = (get_now_kst() - timedelta(days=days)).strftime('%Y-%m-%d')
     try:
         df = fdr.DataReader(code, start_date)
@@ -233,28 +232,23 @@ def get_darwin_strategy(df, buy_price=0):
     return {"buy": final_buys, "sell": sell_pts, "avg": est_avg_price, "score": int(score), "status": status, "ai": ai_prob, "logic": logic_mode, "top_feat": top_feature, "ob": curr['OB']}
 
 # ==========================================
-# 🖥️ 4. 메인 UI (Custom Time Sidebar)
+# 🖥️ 4. 메인 UI (Deep History)
 # ==========================================
 with st.sidebar:
-    # 1. 실시간 시계
     now = get_now_kst()
     st.markdown(f'<div class="clock-box">⏰ {now.strftime("%H:%M:%S")}</div>', unsafe_allow_html=True)
-    st.title("📡 V67.3 Custom Time")
+    st.title("🧬 V67.4 Deep History")
     
-    # 2. 통합 알림 설정 (Expander로 정리)
     with st.expander("⚙️ 알림 및 시간 설정", expanded=True):
         tg_token = st.text_input("Bot Token", type="password")
         tg_id = st.text_input("Chat ID")
-        
         st.markdown("---")
         auto_report = st.checkbox("✅ 자동 리포트 켜기", value=True)
-        # [NEW] 시간 조절 기능 추가
         report_time = st.time_input("발송 예정 시간", datetime.time(16, 0))
         scanner_alert = st.checkbox("📢 스캔 결과 자동 전송", value=True)
     
     min_m = st.number_input("최소 시총(억)", value=3000) * 100000000
     
-    # [NEW] 설정된 시간에 리포트 발송
     if auto_report and now.hour == report_time.hour and now.minute == report_time.minute:
         pf_rep = get_portfolio_gsheets()
         if not pf_rep.empty:
@@ -332,9 +326,11 @@ with tabs[1]: # 스캐너
                     </div>
                 </div>""", unsafe_allow_html=True)
 
-with tabs[2]: # 🧬 진화 검증
-    st.subheader("🧬 Darwin 진화 성적표 (Time Machine)")
-    if st.button("🚀 과거 데이터 검증 시작"):
+with tabs[2]: # 🧬 5년 진화 검증 (Optimized)
+    st.subheader("🧬 5년 진화 성적표 (Bear Market Tested)")
+    st.info("💡 최근 5년(약 240주) 동안의 상승장과 하락장을 모두 검증합니다. (속도 최적화 적용)")
+    
+    if st.button("🚀 5년 데이터 검증 시작"):
         pf = get_portfolio_gsheets()
         sample_codes = pf['Code'].tolist() if not pf.empty else []
         fb = get_safe_stock_listing().head(5)['Code'].tolist()
@@ -344,34 +340,49 @@ with tabs[2]: # 🧬 진화 검증
         prog = st.progress(0)
         
         for idx, code in enumerate(targets):
-            full_df = get_data_safe(code, days=365)
-            if full_df is not None and len(full_df) > 150:
-                for i in range(24, 0, -1):
-                    past_date_idx = - (i * 5)
-                    if abs(past_date_idx) < len(full_df) - 60:
-                        past_df_raw = full_df.iloc[:past_date_idx]
-                        future_df = full_df.iloc[past_date_idx:]
-                        past_df = get_all_indicators(past_df_raw) # Fix applied here
+            # [OPTIMIZATION] 한번에 5년치 데이터를 가져와서 지표까지 다 계산해버림
+            full_df_raw = get_data_safe(code, days=2000) # 5.5년 데이터
+            
+            if full_df_raw is not None and len(full_df_raw) > 300:
+                # 전체 기간에 대해 지표 미리 계산 (Loop 안에서 계산하면 너무 느림)
+                full_df = get_all_indicators(full_df_raw)
+                
+                if full_df is not None:
+                    # 5년 = 약 240주 (1주 간격 테스트)
+                    for i in range(240, 0, -1):
+                        past_date_idx = - (i * 5) # 5거래일(1주) 단위
                         
-                        if past_df is not None and len(future_df) >= 5:
-                            res = get_darwin_strategy(past_df)
-                            if res['score'] >= 50:
-                                entry = past_df['Close'].iloc[-1]
-                                exit_p = future_df['Close'].iloc[4]
-                                results.append({"Date": past_df.index[-1], "Win": 1 if exit_p > entry else 0, "Count": 1})
+                        # 데이터 범위 체크
+                        if abs(past_date_idx) < len(full_df) - 60 and abs(past_date_idx) < len(full_df):
+                            # 이미 계산된 DF에서 슬라이싱만 함 (속도 핵심)
+                            past_df = full_df.iloc[:past_date_idx]
+                            future_df = full_df.iloc[past_date_idx:]
+                            
+                            if len(future_df) >= 5:
+                                # 전략 실행 (지표 계산은 생략하고 로직만 수행)
+                                res = get_darwin_strategy(past_df)
+                                if res['score'] >= 50:
+                                    entry = past_df['Close'].iloc[-1]
+                                    exit_p = future_df['Close'].iloc[4] # 5일 후 가격
+                                    results.append({"Date": past_df.index[-1], "Win": 1 if exit_p > entry else 0, "Count": 1})
             prog.progress((idx+1)/len(targets))
             
         if results:
             df_res = pd.DataFrame(results).sort_values('Date')
             df_res['Win_Rate'] = (df_res['Win'].cumsum() / df_res['Count'].cumsum() * 100)
+            
             c1, c2 = st.columns(2)
-            c1.metric("총 시그널", f"{len(df_res)}회")
-            c2.metric("누적 승률", f"{df_res['Win_Rate'].iloc[-1]:.1f}%")
-            fig = px.line(df_res, x='Date', y='Win_Rate', title="AI 승률 변화 추이", markers=True)
-            fig.add_hline(y=50, line_dash="dot", line_color="gray")
+            c1.metric("총 검증 횟수", f"{len(df_res)}회 (5년)")
+            c2.metric("5년 누적 승률", f"{df_res['Win_Rate'].iloc[-1]:.1f}%")
+            
+            fig = px.line(df_res, x='Date', y='Win_Rate', title="5년(하락장 포함) 승률 변화", markers=False)
+            fig.add_hline(y=50, line_dash="dot", line_color="gray", annotation_text="Break-even")
+            fig.update_layout(yaxis_range=[0, 100])
             st.plotly_chart(fig, use_container_width=True)
+            
+            st.caption("※ 그래프가 2022년 하락장 구간에서도 방어가 잘 되었는지 확인해보세요.")
         else:
-            st.error("데이터 부족")
+            st.error("데이터 부족 또는 매매 신호 없음")
 
 with tabs[3]: # AI 리포트
     if not pf.empty:
