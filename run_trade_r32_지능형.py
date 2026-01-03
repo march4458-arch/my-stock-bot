@@ -17,7 +17,7 @@ from sklearn.ensemble import RandomForestClassifier
 def get_now_kst():
     return datetime.datetime.now(timezone(timedelta(hours=9)))
 
-st.set_page_config(page_title="AI Master V67.4 Deep History", page_icon="🧬", layout="wide")
+st.set_page_config(page_title="AI Master V67.5 Auto-Run", page_icon="⏱️", layout="wide")
 
 st.markdown("""
     <style>
@@ -35,13 +35,13 @@ st.markdown("""
     .mode-badge { background-color: #263238; color: #00e676; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     .ai-badge { background-color: #6200ea; color: white; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     
-    .clock-box { font-size: 1.2em; font-weight: bold; color: #333; text-align: center; margin-bottom: 10px; padding: 10px; background: #e0f7fa; border-radius: 8px; }
+    .clock-box { font-size: 1.2em; font-weight: bold; color: #333; text-align: center; margin-bottom: 15px; padding: 10px; background: #e0f7fa; border-radius: 8px; border: 1px solid #b2ebf2; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- [Data Loader: 5년치 확보] ---
-@st.cache_data(ttl=3600)
-def get_data_safe(code, days=2000): # [UPDATE] 2000일(약 5.5년)로 확장
+# --- [Data Loader: TTL 단축] ---
+@st.cache_data(ttl=60) # [UPDATE] 1분마다 갱신 허용
+def get_data_safe(code, days=365):
     start_date = (get_now_kst() - timedelta(days=days)).strftime('%Y-%m-%d')
     try:
         df = fdr.DataReader(code, start_date)
@@ -232,20 +232,24 @@ def get_darwin_strategy(df, buy_price=0):
     return {"buy": final_buys, "sell": sell_pts, "avg": est_avg_price, "score": int(score), "status": status, "ai": ai_prob, "logic": logic_mode, "top_feat": top_feature, "ob": curr['OB']}
 
 # ==========================================
-# 🖥️ 4. 메인 UI (Deep History)
+# 🖥️ 4. 메인 UI (Auto-Run)
 # ==========================================
 with st.sidebar:
     now = get_now_kst()
     st.markdown(f'<div class="clock-box">⏰ {now.strftime("%H:%M:%S")}</div>', unsafe_allow_html=True)
-    st.title("🧬 V67.4 Deep History")
+    st.title("⏱️ V67.5 Auto-Run")
     
-    with st.expander("⚙️ 알림 및 시간 설정", expanded=True):
+    with st.expander("⚙️ 알림 및 자동화 설정", expanded=True):
         tg_token = st.text_input("Bot Token", type="password")
         tg_id = st.text_input("Chat ID")
         st.markdown("---")
-        auto_report = st.checkbox("✅ 자동 리포트 켜기", value=True)
+        auto_report = st.checkbox("✅ 일일 리포트 자동 발송", value=True)
         report_time = st.time_input("발송 예정 시간", datetime.time(16, 0))
         scanner_alert = st.checkbox("📢 스캔 결과 자동 전송", value=True)
+        st.markdown("---")
+        # [NEW] 자동 실행 설정
+        auto_refresh = st.checkbox("🔄 대시보드/스캐너 자동 갱신", value=False)
+        refresh_min = st.slider("갱신 주기 (분)", 1, 60, 5)
     
     min_m = st.number_input("최소 시총(억)", value=3000) * 100000000
     
@@ -277,9 +281,17 @@ with tabs[0]: # 대시보드
         c2.metric("총 평가", f"{int(t_eval):,}원", f"{(t_eval-t_buy)/t_buy*100:+.2f}%" if t_buy>0 else "0%")
         c3.metric("손익", f"{int(t_eval-t_buy):,}원")
         if dash_list: st.plotly_chart(px.bar(pd.DataFrame(dash_list), x='종목', y='수익', color='상태', template="plotly_white"), use_container_width=True)
+    
+    # [Auto-Run Logic]
+    if auto_refresh:
+        st.toast(f"⏳ {refresh_min}분 뒤 대시보드가 갱신됩니다.")
+        time.sleep(refresh_min * 60)
+        st.rerun()
 
 with tabs[1]: # 스캐너
-    if st.button("🧬 Darwin Evolution 스캔"):
+    if st.button("🧬 Darwin Evolution 스캔") or auto_refresh: # 자동갱신 켜지면 실행
+        if auto_refresh: st.info(f"🔄 자동 스캔 중... (주기: {refresh_min}분)")
+        
         krx = get_safe_stock_listing(); targets = krx[krx['Marcap'] >= min_m].sort_values('Marcap', ascending=False).head(50)
         found, prog = [], st.progress(0)
         with ThreadPoolExecutor(max_workers=5) as ex:
@@ -325,64 +337,47 @@ with tabs[1]: # 스캐너
                         </div>
                     </div>
                 </div>""", unsafe_allow_html=True)
-
-with tabs[2]: # 🧬 5년 진화 검증 (Optimized)
-    st.subheader("🧬 5년 진화 성적표 (Bear Market Tested)")
-    st.info("💡 최근 5년(약 240주) 동안의 상승장과 하락장을 모두 검증합니다. (속도 최적화 적용)")
     
+    # [Auto-Run Logic for Scanner]
+    if auto_refresh:
+        st.toast(f"⏳ {refresh_min}분 뒤 스캔이 자동 갱신됩니다.")
+        time.sleep(refresh_min * 60)
+        st.rerun()
+
+with tabs[2]: # 🧬 5년 진화 검증
+    st.subheader("🧬 5년 진화 성적표 (Time Machine)")
     if st.button("🚀 5년 데이터 검증 시작"):
         pf = get_portfolio_gsheets()
         sample_codes = pf['Code'].tolist() if not pf.empty else []
         fb = get_safe_stock_listing().head(5)['Code'].tolist()
         targets = list(set(sample_codes + fb))[:10]
-        
         results = []
         prog = st.progress(0)
-        
         for idx, code in enumerate(targets):
-            # [OPTIMIZATION] 한번에 5년치 데이터를 가져와서 지표까지 다 계산해버림
-            full_df_raw = get_data_safe(code, days=2000) # 5.5년 데이터
-            
+            full_df_raw = get_data_safe(code, days=2000)
             if full_df_raw is not None and len(full_df_raw) > 300:
-                # 전체 기간에 대해 지표 미리 계산 (Loop 안에서 계산하면 너무 느림)
                 full_df = get_all_indicators(full_df_raw)
-                
                 if full_df is not None:
-                    # 5년 = 약 240주 (1주 간격 테스트)
                     for i in range(240, 0, -1):
-                        past_date_idx = - (i * 5) # 5거래일(1주) 단위
-                        
-                        # 데이터 범위 체크
+                        past_date_idx = - (i * 5)
                         if abs(past_date_idx) < len(full_df) - 60 and abs(past_date_idx) < len(full_df):
-                            # 이미 계산된 DF에서 슬라이싱만 함 (속도 핵심)
                             past_df = full_df.iloc[:past_date_idx]
                             future_df = full_df.iloc[past_date_idx:]
-                            
                             if len(future_df) >= 5:
-                                # 전략 실행 (지표 계산은 생략하고 로직만 수행)
                                 res = get_darwin_strategy(past_df)
                                 if res['score'] >= 50:
                                     entry = past_df['Close'].iloc[-1]
-                                    exit_p = future_df['Close'].iloc[4] # 5일 후 가격
+                                    exit_p = future_df['Close'].iloc[4]
                                     results.append({"Date": past_df.index[-1], "Win": 1 if exit_p > entry else 0, "Count": 1})
             prog.progress((idx+1)/len(targets))
-            
         if results:
             df_res = pd.DataFrame(results).sort_values('Date')
             df_res['Win_Rate'] = (df_res['Win'].cumsum() / df_res['Count'].cumsum() * 100)
-            
             c1, c2 = st.columns(2)
-            c1.metric("총 검증 횟수", f"{len(df_res)}회 (5년)")
-            c2.metric("5년 누적 승률", f"{df_res['Win_Rate'].iloc[-1]:.1f}%")
-            
-            fig = px.line(df_res, x='Date', y='Win_Rate', title="5년(하락장 포함) 승률 변화", markers=False)
-            fig.add_hline(y=50, line_dash="dot", line_color="gray", annotation_text="Break-even")
-            fig.update_layout(yaxis_range=[0, 100])
-            st.plotly_chart(fig, use_container_width=True)
-            
-            st.caption("※ 그래프가 2022년 하락장 구간에서도 방어가 잘 되었는지 확인해보세요.")
-        else:
-            st.error("데이터 부족 또는 매매 신호 없음")
+            c1.metric("총 검증", f"{len(df_res)}회"); c2.metric("누적 승률", f"{df_res['Win_Rate'].iloc[-1]:.1f}%")
+            fig = px.line(df_res, x='Date', y='Win_Rate', title="5년 승률 변화", markers=False)
+            fig.add_hline(y=50, line_dash="dot", line_color="gray"); st.plotly_chart(fig, use_container_width=True)
+        else: st.error("데이터 부족")
 
 with tabs[3]: # AI 리포트
     if not pf.empty:
@@ -392,23 +387,13 @@ with tabs[3]: # AI 리포트
         if df_ai is not None:
             res = get_darwin_strategy(df_ai, row['Buy_Price'])
             cp = df_ai['Close'].iloc[-1]
-            
             if st.button("📡 텔레그램으로 전략 전송"):
                 msg = f"💼 <b>[{sel}] 대응 전략</b>\n💰 현재가: {cp:,}원\n\n🔵 1차매수: {res['buy'][0][0]:,}원\n🔴 1차매도: {res['sell'][0][0]:,}원\n💡 예상평단: {res['avg']:,}원"
                 send_telegram_msg(tg_token, tg_id, msg)
                 st.success("전송 완료")
-            
             buy_html = f"""<div class="buy-box"><b>🔵 3분할 매수</b><br>1차: <b>{res['buy'][0][0]:,}원</b> ({res['buy'][0][1]})<br>2차: <b>{res['buy'][1][0]:,}원</b> ({res['buy'][1][1]})<br>3차: <b>{res['buy'][2][0]:,}원</b> ({res['buy'][2][1]})<div class="avg-text">예상 평단: {res['avg']:,}원</div></div>"""
             sell_html = f"""<div class="sell-box"><b>🔴 3분할 매도</b><br>1차: <b>{res['sell'][0][0]:,}원</b> ({res['sell'][0][1]})<br>2차: <b>{res['sell'][1][0]:,}원</b> ({res['sell'][1][1]})<br>3차: <b>{res['sell'][2][0]:,}원</b> ({res['sell'][2][1]})</div>"""
-            
-            st.markdown(f"""<div class="metric-card" style="border-left:10px solid {res['status']['color']};">
-                <div style="display:flex; justify-content:space-between;">
-                    <div><h2>{sel} <span class="mode-badge">{res['logic']}</span></h2><p style="font-size:1.1em;">{res['status']['msg']} (AI승률: {res['ai']}%)</p></div>
-                    <div style="text-align:right;"><h2 style="color:#333;">{cp:,}원</h2></div>
-                </div>
-                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px; margin-top:20px;">{buy_html} {sell_html}</div>
-                </div>""", unsafe_allow_html=True)
-            
+            st.markdown(f"""<div class="metric-card" style="border-left:10px solid {res['status']['color']};"><div style="display:flex; justify-content:space-between;"><div><h2>{sel} <span class="mode-badge">{res['logic']}</span></h2><p style="font-size:1.1em;">{res['status']['msg']} (AI승률: {res['ai']}%)</p></div><div style="text-align:right;"><h2 style="color:#333;">{cp:,}원</h2></div></div><div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px; margin-top:20px;">{buy_html} {sell_html}</div></div>""", unsafe_allow_html=True)
             fig = go.Figure(data=[go.Candlestick(x=df_ai.index[-100:], open=df_ai['Open'][-100:], close=df_ai['Close'][-100:], high=df_ai['High'][-100:], low=df_ai['Low'][-100:])])
             fig.add_hline(y=res['ob'], line_color="purple", line_width=2, line_dash="dash", annotation_text="Order Block")
             fig.update_layout(height=450, template="plotly_white", xaxis_rangeslider_visible=False)
