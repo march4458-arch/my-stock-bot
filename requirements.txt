@@ -1,11 +1,10 @@
 streamlit
 pandas
-finance-datareader
-yfinance
 numpy
 plotly
-requests
-st-gsheets-connection
 scikit-learn
-pandas
-numpy
+streamlit-gsheets
+requests
+finance-datareader
+yfinance
+pyupbit
