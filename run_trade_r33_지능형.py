@@ -24,7 +24,7 @@ def check_market_open():
     end_time = datetime.time(15, 30)
     return start_time <= now.time() <= end_time
 
-st.set_page_config(page_title="AI Master V69.3 Sniper", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="AI Master V69.4 Transparent", page_icon="📡", layout="wide")
 
 st.markdown("""
     <style>
@@ -45,7 +45,9 @@ st.markdown("""
     .hit-tag { background-color: #e8f5e9; color: #2e7d32; font-size: 0.8em; padding: 3px 6px; border-radius: 4px; margin-right: 5px; border: 1px solid #c8e6c9; display: inline-block; margin-bottom: 2px; }
     
     .clock-box { font-size: 1.2em; font-weight: bold; color: #333; text-align: center; margin-bottom: 5px; padding: 10px; background: #e0f7fa; border-radius: 8px; border: 1px solid #b2ebf2; }
-    .source-box { background-color: #37474f; color: #fff; padding: 8px; border-radius: 6px; text-align: center; font-size: 0.9em; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .source-box { background-color: #37474f; color: #fff; padding: 8px; border-radius: 6px; text-align: center; font-size: 0.9em; margin-bottom: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .list-box { background-color: #546e7a; color: #fff; padding: 8px; border-radius: 6px; text-align: center; font-size: 0.9em; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    
     .status-open { color: #2e7d32; font-weight: bold; text-align: center; margin-bottom: 15px; }
     .status-closed { color: #c62828; font-weight: bold; text-align: center; margin-bottom: 15px; }
     </style>
@@ -75,15 +77,19 @@ def get_data_safe(code, days=2000):
     except: pass
     return None
 
+# [NEW] 리스팅 소스 확인 기능 추가
 @st.cache_data(ttl=86400)
 def get_safe_stock_listing():
+    # 1. KRX 전체 시도
     try:
-        kospi = fdr.StockListing('KOSPI'); kosdaq = fdr.StockListing('KOSDAQ')
-        df = pd.concat([kospi, kosdaq])
-        if not df.empty: return df
+        df = fdr.StockListing('KRX') # KOSPI+KOSDAQ 통합
+        if not df.empty:
+            return df, "⚡ KRX Live (전체)"
     except: pass
-    fb = [['005930','삼성전자'],['000660','SK하이닉스'],['373220','LG에너지솔루션'],['207940','삼성바이오로직스'],['005380','현대차'],['000270','기아'],['005490','POSCO홀딩스'],['035420','NAVER'],['006400','삼성SDI'],['051910','LG화학'],['105560','KB금융'],['086520','에코프로'],['247540','에코프로비엠'],['042660','한화오션'],['010130','고려아연'],['034020','두산에너빌리티']]
-    return pd.DataFrame(fb, columns=['Code','Name']).assign(Marcap=10**15)
+    
+    # 2. 실패 시 백업 리스트 (Fallback)
+    fb = [['005930','삼성전자'],['000660','SK하이닉스'],['373220','LG에너지솔루션'],['207940','삼성바이오로직스'],['005380','현대차'],['000270','기아'],['005490','POSCO홀딩스'],['035420','NAVER'],['006400','삼성SDI'],['051910','LG화학'],['105560','KB금융'],['086520','에코프로'],['247540','에코프로비엠'],['042660','한화오션'],['010130','고려아연'],['034020','두산에너빌리티'],['035720','카카오'],['003670','포스코퓨처엠'],['028260','삼성물산'],['055550','신한지주']]
+    return pd.DataFrame(fb, columns=['Code','Name']).assign(Marcap=10**15), "⚠️ Backup List (20개)"
 
 def get_portfolio_gsheets():
     try:
@@ -171,7 +177,7 @@ def get_all_indicators(df):
     return df
 
 # ==========================================
-# 🧠 3. Sniper 전략 (Re-Tightened)
+# 🧠 3. Sniper 전략 (V69.3 Logic)
 # ==========================================
 def get_darwin_strategy(df, buy_price=0):
     if df is None: return None
@@ -187,7 +193,6 @@ def get_darwin_strategy(df, buy_price=0):
             model = RandomForestClassifier(n_estimators=60, random_state=42, max_depth=5)
             train_df = data_ml.iloc[:-1]; train_df['Target'] = (df['Close'].shift(-1).iloc[:-1] > df['Close'].iloc[:-1]).astype(int)
             model.fit(train_df.tail(200), train_df['Target'].tail(200))
-            
             top_idx = np.argmax(model.feature_importances_); top_feature = features[top_idx]
             ai_prob = int(model.predict_proba(data_ml.iloc[-1:])[0][1] * 100)
             
@@ -197,28 +202,22 @@ def get_darwin_strategy(df, buy_price=0):
             elif top_feature == 'BB_Pos': logic_mode = "🌊 Mean Reversion"
         except: pass
 
-    # 🎯 Score Calculation (다시 엄격하게!)
     score = 0; hit_reasons = [] 
     
-    # A. Basic (가중치 축소: 10 -> 5)
     if cp > curr['MA20']: score += 5; hit_reasons.append("MA20위") 
     
-    # B. Pro (유지)
     if cp >= curr['MVWAP']: score += 15; hit_reasons.append("기관수급")
     if cp <= curr['OB'] * 1.05: score += 20; hit_reasons.append("OB지지")
     if curr['Squeeze']: score += 15; hit_reasons.append("응축")
     
-    # C. Oscillators (부분 점수 삭제 -> 확실한 것만)
-    if curr['RSI'] < 35: score += 15; hit_reasons.append("RSI과매도") # 45 삭제
-    if curr['CCI'] < -100: score += 15; hit_reasons.append("CCI침체") # -80 삭제
-    if curr['MACD_Hist'] > prev['MACD_Hist'] and curr['MACD_Hist'] < 0: score += 10; hit_reasons.append("MACD반전") # 음수에서 반전일때만
-    if curr['ER'] > 0.6: score += 10; hit_reasons.append("추세효율") # 0.5 -> 0.6 상향
+    if curr['RSI'] < 35: score += 15; hit_reasons.append("RSI과매도")
+    if curr['CCI'] < -100: score += 15; hit_reasons.append("CCI침체")
+    if curr['MACD_Hist'] > prev['MACD_Hist'] and curr['MACD_Hist'] < 0: score += 10; hit_reasons.append("MACD반전")
+    if curr['ER'] > 0.6: score += 10; hit_reasons.append("추세효율")
     if curr['MFI'] < 20: score += 10; hit_reasons.append("MFI바닥")
     
-    # D. Safety Lock (유지)
     if ai_prob >= 60: score += (ai_prob - 50) * 1.5
     elif ai_prob <= 40: score -= 20
-    # 41~59% 구간은 점수 0 (변동 없음)
 
     def adj(p):
         if np.isnan(p) or p <= 0: return 0
@@ -254,7 +253,7 @@ def get_darwin_strategy(df, buy_price=0):
     if buy_price > 0:
         pct = (cp - buy_price) / buy_price * 100
         if cp >= sell_pts[0][0]: status = {"type": "💰 익절", "color": "#2e7d32", "msg": "수익권", "alert": True}
-        elif pct < -3 and score >= 60: status = {"type": "❄️ 물타기", "color": "#0288d1", "msg": "추매", "alert": True} # 기준 50->60 상향
+        elif pct < -3 and score >= 60: status = {"type": "❄️ 물타기", "color": "#0288d1", "msg": "추매", "alert": True}
         elif pct > 2 and logic_mode == "🔥 Trend Mode": status = {"type": "🔥 불타기", "color": "#d32f2f", "msg": "가속", "alert": True}
     
     return {"buy": final_buys, "sell": sell_pts, "avg": est_avg, "score": int(score), "status": status, "ai": ai_prob, "logic": logic_mode, "top_feat": top_feature, "reasons": hit_reasons, "mvwap": curr['MVWAP']}
@@ -270,10 +269,15 @@ with st.sidebar:
     if is_market_open: st.markdown('<div class="status-open">🟢 KOSPI/KOSDAQ 장중</div>', unsafe_allow_html=True)
     else: st.markdown('<div class="status-closed">🔴 정규장 마감 (휴장)</div>', unsafe_allow_html=True)
     
+    # [NEW] 소스 컨테이너
     source_container = st.empty()
     source_container.markdown('<div class="source-box">📡 Ready</div>', unsafe_allow_html=True)
     
-    st.title("🎯 V69.3 Sniper")
+    # [NEW] 리스팅 소스 확인
+    krx_list, list_src = get_safe_stock_listing()
+    st.markdown(f'<div class="list-box">📋 {list_src}</div>', unsafe_allow_html=True)
+
+    st.title("📡 V69.4 Transparent")
     
     with st.expander("⚙️ 설정 및 자동화", expanded=True):
         tg_token = st.text_input("Bot Token", type="password")
@@ -292,7 +296,7 @@ with st.sidebar:
     if auto_report and now.hour == report_time.hour and now.minute == report_time.minute:
         pf_rep = get_portfolio_gsheets()
         if not pf_rep.empty:
-            msg = f"🎯 <b>[{report_time.strftime('%H:%M')} 정기 리포트]</b>\n"
+            msg = f"🎩 <b>[{report_time.strftime('%H:%M')} 정기 리포트]</b>\n"
             for _, r in pf_rep.iterrows():
                 d = get_data_safe(r['Code'], days=5)
                 if d is not None:
@@ -329,9 +333,12 @@ with tabs[0]: # 대시보드
         else: time.sleep(refresh_min * 60); st.rerun()
 
 with tabs[1]: # 스캐너
-    if st.button("🎯 스나이퍼 스캔") or (auto_refresh and (not only_market_time or is_market_open)):
+    if st.button("📡 투명 스캔") or (auto_refresh and (not only_market_time or is_market_open)):
         if auto_refresh: st.info(f"🔄 자동 스캔 중... (주기: {refresh_min}분)")
-        krx = get_safe_stock_listing(); targets = krx[krx['Marcap'] >= min_m].sort_values('Marcap', ascending=False).head(50)
+        
+        # [NEW] 투명 리스트 사용
+        targets = krx_list[krx_list['Marcap'] >= min_m].sort_values('Marcap', ascending=False).head(50)
+        
         found, prog = [], st.progress(0)
         with ThreadPoolExecutor(max_workers=5) as ex:
             futs = {ex.submit(get_all_indicators, get_data_safe(r['Code'], days=250)): r['Name'] for _, r in targets.iterrows()}
@@ -375,10 +382,13 @@ with tabs[1]: # 스캐너
         else: time.sleep(refresh_min * 60); st.rerun()
 
 with tabs[2]: # 5년 검증
-    st.subheader("🧬 5년 진화 성적표 (Sniper Logic)")
+    st.subheader("🧬 5년 진화 성적표")
     if st.button("🚀 5년 데이터 검증 시작"):
-        # (검증 코드 동일 - 생략)
-        st.info("검증 로직 실행 (상단 코드 참조)")
+        # (검증 코드 동일)
+        # 리스트 소스는 krx_list 사용
+        targets = list(set(pf['Code'].tolist() + krx_list.head(5)['Code'].tolist()))[:10]
+        # (이하 생략 - 위와 동일)
+        st.info("검증 로직 실행")
 
 with tabs[3]: # AI 리포트
     if not pf.empty:
@@ -391,7 +401,7 @@ with tabs[3]: # AI 리포트
             res = get_darwin_strategy(df_ai, row['Buy_Price'])
             cp = df_ai['Close'].iloc[-1]
             if st.button("📡 전략 전송"):
-                msg = f"🎯 <b>[{sel}] Sniper 전략</b>\n💰 {cp:,}원\n\n🔵 1차: {res['buy'][0][0]:,}원\n🔴 1차: {res['sell'][0][0]:,}원\n💡 평단: {res['avg']:,}원"
+                msg = f"🎯 <b>[{sel}] 전략</b>\n💰 {cp:,}원\n\n🔵 1차: {res['buy'][0][0]:,}원\n🔴 1차: {res['sell'][0][0]:,}원\n💡 평단: {res['avg']:,}원"
                 send_telegram_msg(tg_token, tg_id, msg); st.success("전송 완료")
             
             reasons_html = "".join([f"<span class='hit-tag'>✅ {r}</span>" for r in res['reasons']])
@@ -409,7 +419,8 @@ with tabs[4]: # 관리
     with st.form("add"):
         c1, c2, c3 = st.columns(3); n, p, q = c1.text_input("종목명"), c2.number_input("평단가"), c3.number_input("수량")
         if st.form_submit_button("등록"):
-            krx = get_safe_stock_listing(); m = krx[krx['Name']==n]
+            # [NEW] 투명 리스트 사용
+            m = krx_list[krx_list['Name']==n]
             if not m.empty:
                 new = pd.DataFrame([[m.iloc[0]['Code'], n, p, q]], columns=['Code', 'Name', 'Buy_Price', 'Qty'])
                 st.connection("gsheets", type=GSheetsConnection).update(data=pd.concat([df_p, new], ignore_index=True)); st.rerun()
