@@ -17,7 +17,7 @@ from sklearn.ensemble import RandomForestClassifier
 def get_now_kst():
     return datetime.datetime.now(timezone(timedelta(hours=9)))
 
-st.set_page_config(page_title="AI Master V66.2.1", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="AI Master V66.3", page_icon="🛡️", layout="wide")
 
 st.markdown("""
     <style>
@@ -25,18 +25,18 @@ st.markdown("""
     .metric-card { background: white; padding: 20px; border-radius: 12px; border-left: 5px solid #6200ea; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
     .scanner-card { padding: 20px; border-radius: 15px; border: 1px solid #e0e0e0; margin-bottom: 15px; background-color: white; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
     
-    .buy-box { background-color: #e3f2fd; padding: 12px; border-radius: 8px; border: 1px solid #90caf9; color: #0d47a1; }
-    .sell-box { background-color: #ffebee; padding: 12px; border-radius: 8px; border: 1px solid #ef9a9a; color: #b71c1c; }
-    .avg-box { background-color: #f3e5f5; padding: 10px; border-radius: 8px; border: 1px solid #ce93d8; color: #4a148c; font-weight: bold; text-align: center; margin-top: 10px;}
+    .buy-box { background-color: #e3f2fd; padding: 15px; border-radius: 10px; border: 1px solid #90caf9; color: #0d47a1; margin-bottom: 10px; }
+    .sell-box { background-color: #ffebee; padding: 15px; border-radius: 10px; border: 1px solid #ef9a9a; color: #b71c1c; margin-bottom: 10px; }
+    .avg-text { font-weight: bold; color: #4a148c; text-align: center; background-color: #f3e5f5; padding: 5px; border-radius: 5px; margin-top: 5px; }
     
     .price-tag { font-weight: bold; font-size: 1.1em; }
-    .logic-tag { font-size: 0.8em; color: #555; margin-left: 5px; background-color: rgba(255,255,255,0.5); padding: 2px 5px; border-radius: 4px;}
+    .logic-tag { font-size: 0.8em; color: #555; background-color: rgba(255,255,255,0.7); padding: 2px 5px; border-radius: 4px; margin-left: 5px; }
     .mode-badge { background-color: #263238; color: #00e676; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     .ai-badge { background-color: #6200ea; color: white; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- [Dual Engine Data Loader] ---
+# --- [Data Loader] ---
 @st.cache_data(ttl=3600)
 def get_data_safe(code, days=365):
     start_date = (get_now_kst() - timedelta(days=days)).strftime('%Y-%m-%d')
@@ -97,7 +97,6 @@ def get_all_indicators(df):
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)
     close = df['Close']
     
-    # Basic
     df['MA20'] = close.rolling(20).mean()
     df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
     
@@ -147,7 +146,7 @@ def get_all_indicators(df):
     return df
 
 # ==========================================
-# 🧠 3. Darwin 전략 (평단가 계산 추가)
+# 🧠 3. Darwin 전략 (Actionable Logic)
 # ==========================================
 def get_darwin_strategy(df, buy_price=0):
     if df is None: return None
@@ -170,7 +169,6 @@ def get_darwin_strategy(df, buy_price=0):
             elif top_feature in ['CCI', 'RSI', 'SNOW_L']: logic_mode = "🌊 Cycle Mode"
             elif top_feature in ['Vol_Z', 'MFI']: logic_mode = "🏛️ Whale Mode"
             elif top_feature == 'BB_Dist': logic_mode = "🛡️ Defense Mode"
-            
             ai_prob = int(model.predict_proba(data_ml[features].iloc[-1:])[0][1] * 100)
         except: pass
 
@@ -194,7 +192,6 @@ def get_darwin_strategy(df, buy_price=0):
     else:
         if cp <= curr['OB']: score += 15
         if curr['CCI'] < -100: score += 15
-    
     score += (ai_prob * 0.4)
 
     # 3. 3-Split Calculation
@@ -226,32 +223,29 @@ def get_darwin_strategy(df, buy_price=0):
     else:
         final_buys = valid_buys[:3]
 
-    # [NEW] 예상 평단가 (1:1:1 비중 가정)
     est_avg_price = int(sum([p[0] for p in final_buys]) / 3)
-
     sell_pts = [(adj(curr['BB1_Up']), "BB상단"), (adj(cp + atr*3), "ATR x3"), (adj(cp + atr*5), "ATR x5")]
     
     status = {"type": "💤 관망", "color": "#6c757d", "msg": "대기", "alert": False}
     if buy_price > 0:
         y = (cp - buy_price) / buy_price * 100
-        if cp >= sell_pts[0][0]: status = {"type": "💰 익절", "color": "#28a745", "msg": "수익권 도달", "alert": True}
+        if cp >= sell_pts[0][0]: status = {"type": "💰 익절", "color": "#28a745", "msg": "수익권", "alert": True}
         elif y < -3 and score >= 45: status = {"type": "❄️ 물타기", "color": "#00d2ff", "msg": f"추매({logic_mode})", "alert": True}
-        elif y > 2 and ai_prob > 60: status = {"type": "🔥 불타기", "color": "#ff4b4b", "msg": "추세가속", "alert": True}
+        elif y > 2 and ai_prob > 60: status = {"type": "🔥 불타기", "color": "#ff4b4b", "msg": "추세추종", "alert": True}
 
     return {"buy": final_buys, "sell": sell_pts, "avg": est_avg_price, "score": int(score), "status": status, "ai": ai_prob, "logic": logic_mode, "top_feat": top_feature, "ob": curr['OB']}
 
 # ==========================================
-# 🖥️ 4. 메인 UI
+# 🖥️ 4. 메인 UI (Actionable View)
 # ==========================================
 with st.sidebar:
-    st.title("🛡️ V66.2.1 Action")
+    st.title("🛡️ V66.3 Darwin Action")
     now = get_now_kst()
     st.info(f"KST: {now.strftime('%H:%M:%S')}")
     tg_token = st.text_input("Bot Token", type="password")
     tg_id = st.text_input("Chat ID")
     min_m = st.number_input("최소 시총(억)", value=3000) * 100000000
     auto_report = st.checkbox("16시 마감 리포트", value=True)
-    
     if auto_report and now.hour == 16 and now.minute == 0:
         pf_rep = get_portfolio_gsheets()
         if not pf_rep.empty:
@@ -281,7 +275,7 @@ with tabs[0]: # 대시보드
         c3.metric("손익", f"{int(t_eval-t_buy):,}원")
         if dash_list: st.plotly_chart(px.bar(pd.DataFrame(dash_list), x='종목', y='수익', color='상태', template="plotly_white"), use_container_width=True)
 
-with tabs[1]: # 스캐너 (명확한 3분할 및 예상평단)
+with tabs[1]: # 스캐너
     if st.button("🧬 Darwin Evolution 스캔"):
         krx = get_safe_stock_listing(); targets = krx[krx['Marcap'] >= min_m].sort_values('Marcap', ascending=False).head(50)
         found, prog = [], st.progress(0)
@@ -308,7 +302,7 @@ with tabs[1]: # 스캐너 (명확한 3분할 및 예상평단)
                             1차: <b>{s['buy'][0][0]:,}원</b> <span class="logic-tag">{s['buy'][0][1]}</span><br>
                             2차: <b>{s['buy'][1][0]:,}원</b> <span class="logic-tag">{s['buy'][1][1]}</span><br>
                             3차: <b>{s['buy'][2][0]:,}원</b> <span class="logic-tag">{s['buy'][2][1]}</span>
-                            <div class="avg-box">예상 평단: {s['avg']:,}원</div>
+                            <div class="avg-text">예상 평단: {s['avg']:,}원</div>
                         </div>
                         <div class="sell-box">
                             <b>🔴 3분할 매도</b><br>
@@ -319,7 +313,7 @@ with tabs[1]: # 스캐너 (명확한 3분할 및 예상평단)
                     </div>
                 </div>""", unsafe_allow_html=True)
 
-with tabs[2]: # AI 리포트
+with tabs[2]: # AI 리포트 (강제 노출형)
     if not pf.empty:
         sel = st.selectbox("종목 선택", pf['Name'].unique())
         row = pf[pf['Name'] == sel].iloc[0]
@@ -327,29 +321,28 @@ with tabs[2]: # AI 리포트
         if df_ai is not None:
             res = get_darwin_strategy(df_ai, row['Buy_Price'])
             
-            action_msg = ""
-            if "물타기" in res['status']['type']:
-                action_msg = f"""<div style="background:#e3f2fd; padding:15px; border-radius:10px; border:1px solid #90caf9;">
-                    <h4 style="margin:0 0 10px 0; color:#0d47a1;">❄️ 물타기 추천 단가</h4>
-                    • 1차: <b>{res['buy'][0][0]:,}원</b> ({res['buy'][0][1]})<br>
-                    • 2차: <b>{res['buy'][1][0]:,}원</b> ({res['buy'][1][1]})<br>
-                    • 3차: <b>{res['buy'][2][0]:,}원</b> ({res['buy'][2][1]})<br>
-                    <hr style="margin:5px 0;">
-                    <b>💡 3회 분할 매수 완료 시 예상 평단: {res['avg']:,}원</b>
-                    </div>"""
-            elif "불타기" in res['status']['type']:
-                action_msg = f"""<div style="background:#ffebee; padding:15px; border-radius:10px; border:1px solid #ef9a9a;">
-                    <h4 style="margin:0 0 10px 0; color:#b71c1c;">🔥 불타기 추천 단가</h4>
-                    • 1차: <b>{res['buy'][0][0]:,}원</b> ({res['buy'][0][1]})<br>
-                    • 2차: <b>{res['buy'][1][0]:,}원</b> ({res['buy'][1][1]})<br>
-                    <hr style="margin:5px 0;">
-                    <b>💡 분할 진입 시 예상 평단: {res['avg']:,}원</b>
-                    </div>"""
+            # [FIX] 무조건 표시되는 전략 패널
+            buy_html = f"""<div class="buy-box">
+                <b>🔵 3분할 매수 (Support)</b><br>
+                1차: <b>{res['buy'][0][0]:,}원</b> ({res['buy'][0][1]})<br>
+                2차: <b>{res['buy'][1][0]:,}원</b> ({res['buy'][1][1]})<br>
+                3차: <b>{res['buy'][2][0]:,}원</b> ({res['buy'][2][1]})
+                <div class="avg-text">예상 평단: {res['avg']:,}원</div>
+            </div>"""
+            
+            sell_html = f"""<div class="sell-box">
+                <b>🔴 3분할 매도 (Target)</b><br>
+                1차: <b>{res['sell'][0][0]:,}원</b> ({res['sell'][0][1]})<br>
+                2차: <b>{res['sell'][1][0]:,}원</b> ({res['sell'][1][1]})<br>
+                3차: <b>{res['sell'][2][0]:,}원</b> ({res['sell'][2][1]})
+            </div>"""
             
             st.markdown(f"""<div class="metric-card" style="border-left:10px solid {res['status']['color']};">
                 <h2>{sel} <span class="mode-badge">{res['logic']}</span></h2>
                 <p style="font-size:1.1em;">{res['status']['msg']} (AI승률: {res['ai']}%)</p>
-                {action_msg}
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px; margin-top:15px;">
+                    {buy_html} {sell_html}
+                </div>
                 </div>""", unsafe_allow_html=True)
             
             fig = go.Figure(data=[go.Candlestick(x=df_ai.index[-100:], open=df_ai['Open'][-100:], close=df_ai['Close'][-100:], high=df_ai['High'][-100:], low=df_ai['Low'][-100:])])
