@@ -17,7 +17,7 @@ from sklearn.ensemble import RandomForestClassifier
 def get_now_kst():
     return datetime.datetime.now(timezone(timedelta(hours=9)))
 
-st.set_page_config(page_title="AI Master V66.3", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="AI Master V66.4", page_icon="🛡️", layout="wide")
 
 st.markdown("""
     <style>
@@ -30,6 +30,7 @@ st.markdown("""
     .avg-text { font-weight: bold; color: #4a148c; text-align: center; background-color: #f3e5f5; padding: 5px; border-radius: 5px; margin-top: 5px; }
     
     .price-tag { font-weight: bold; font-size: 1.1em; }
+    .current-price { font-size: 1.5em; font-weight: bold; color: #333; }
     .logic-tag { font-size: 0.8em; color: #555; background-color: rgba(255,255,255,0.7); padding: 2px 5px; border-radius: 4px; margin-left: 5px; }
     .mode-badge { background-color: #263238; color: #00e676; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     .ai-badge { background-color: #6200ea; color: white; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
@@ -146,7 +147,7 @@ def get_all_indicators(df):
     return df
 
 # ==========================================
-# 🧠 3. Darwin 전략 (Actionable Logic)
+# 🧠 3. Darwin 전략
 # ==========================================
 def get_darwin_strategy(df, buy_price=0):
     if df is None: return None
@@ -236,10 +237,10 @@ def get_darwin_strategy(df, buy_price=0):
     return {"buy": final_buys, "sell": sell_pts, "avg": est_avg_price, "score": int(score), "status": status, "ai": ai_prob, "logic": logic_mode, "top_feat": top_feature, "ob": curr['OB']}
 
 # ==========================================
-# 🖥️ 4. 메인 UI (Actionable View)
+# 🖥️ 4. 메인 UI (Current Price View)
 # ==========================================
 with st.sidebar:
-    st.title("🛡️ V66.3 Darwin Action")
+    st.title("🛡️ V66.4 Darwin Price")
     now = get_now_kst()
     st.info(f"KST: {now.strftime('%H:%M:%S')}")
     tg_token = st.text_input("Bot Token", type="password")
@@ -275,7 +276,7 @@ with tabs[0]: # 대시보드
         c3.metric("손익", f"{int(t_eval-t_buy):,}원")
         if dash_list: st.plotly_chart(px.bar(pd.DataFrame(dash_list), x='종목', y='수익', color='상태', template="plotly_white"), use_container_width=True)
 
-with tabs[1]: # 스캐너
+with tabs[1]: # 스캐너 (현재가 추가)
     if st.button("🧬 Darwin Evolution 스캔"):
         krx = get_safe_stock_listing(); targets = krx[krx['Marcap'] >= min_m].sort_values('Marcap', ascending=False).head(50)
         found, prog = [], st.progress(0)
@@ -285,18 +286,26 @@ with tabs[1]: # 스캐너
                 res = f.result()
                 if res is not None:
                     s = get_darwin_strategy(res)
-                    found.append({"name": futs[f], "score": s['score'], "strat": s})
+                    # [NEW] 현재가 추출
+                    cp = res['Close'].iloc[-1]
+                    found.append({"name": futs[f], "score": s['score'], "strat": s, "cp": cp})
                 prog.progress((i+1)/len(targets))
         
         for d in sorted(found, key=lambda x: x['score'], reverse=True)[:15]:
             s = d['strat']
             st.markdown(f"""
                 <div class="scanner-card">
-                    <div style="display:flex; justify-content:space-between;">
-                        <h3 style="margin:0;">{d['name']}</h3>
-                        <div><span class="mode-badge">{s['logic']}</span> <span class="ai-badge">AI: {s['ai']}%</span></div>
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <h3 style="margin:0;">{d['name']}</h3>
+                            <span class="current-price">{d['cp']:,}원</span>
+                        </div>
+                        <div style="text-align:right;">
+                            <span class="mode-badge">{s['logic']}</span> <span class="ai-badge">AI: {s['ai']}%</span><br>
+                            <span style="font-size:0.8em; color:#666;">Score: {d['score']}</span>
+                        </div>
                     </div>
-                    <div style="margin: 10px 0; display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+                    <div style="margin: 15px 0; display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
                         <div class="buy-box">
                             <b>🔵 3분할 매수</b><br>
                             1차: <b>{s['buy'][0][0]:,}원</b> <span class="logic-tag">{s['buy'][0][1]}</span><br>
@@ -313,15 +322,15 @@ with tabs[1]: # 스캐너
                     </div>
                 </div>""", unsafe_allow_html=True)
 
-with tabs[2]: # AI 리포트 (강제 노출형)
+with tabs[2]: # AI 리포트 (현재가 추가)
     if not pf.empty:
         sel = st.selectbox("종목 선택", pf['Name'].unique())
         row = pf[pf['Name'] == sel].iloc[0]
         df_ai = get_all_indicators(get_data_safe(row['Code'], days=365))
         if df_ai is not None:
             res = get_darwin_strategy(df_ai, row['Buy_Price'])
+            cp = df_ai['Close'].iloc[-1]
             
-            # [FIX] 무조건 표시되는 전략 패널
             buy_html = f"""<div class="buy-box">
                 <b>🔵 3분할 매수 (Support)</b><br>
                 1차: <b>{res['buy'][0][0]:,}원</b> ({res['buy'][0][1]})<br>
@@ -338,9 +347,17 @@ with tabs[2]: # AI 리포트 (강제 노출형)
             </div>"""
             
             st.markdown(f"""<div class="metric-card" style="border-left:10px solid {res['status']['color']};">
-                <h2>{sel} <span class="mode-badge">{res['logic']}</span></h2>
-                <p style="font-size:1.1em;">{res['status']['msg']} (AI승률: {res['ai']}%)</p>
-                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px; margin-top:15px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <h2>{sel} <span class="mode-badge">{res['logic']}</span></h2>
+                        <p style="font-size:1.1em; margin:0;">{res['status']['msg']} (AI승률: {res['ai']}%)</p>
+                    </div>
+                    <div style="text-align:right;">
+                        <h2 style="color:#333; margin:0;">{cp:,}원</h2>
+                        <span style="color:#666;">현재가</span>
+                    </div>
+                </div>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px; margin-top:20px;">
                     {buy_html} {sell_html}
                 </div>
                 </div>""", unsafe_allow_html=True)
