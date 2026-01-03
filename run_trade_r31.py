@@ -17,7 +17,7 @@ from sklearn.ensemble import RandomForestClassifier
 def get_now_kst():
     return datetime.datetime.now(timezone(timedelta(hours=9)))
 
-st.set_page_config(page_title="AI Master V65.3.1", page_icon="🏛️", layout="wide")
+st.set_page_config(page_title="AI Master V65.3.2", page_icon="🏛️", layout="wide")
 
 st.markdown("""
     <style>
@@ -89,7 +89,7 @@ def send_telegram_msg(token, chat_id, message):
         except: pass
 
 # ==========================================
-# 📊 2. 지표 엔진 (수정됨: 계산 순서 변경)
+# 📊 2. 지표 엔진 (CCI 수정됨)
 # ==========================================
 def calc_stoch(df, n, m, t):
     l, h = df['Low'].rolling(n).min(), df['High'].rolling(n).max()
@@ -99,35 +99,29 @@ def get_all_indicators(df):
     if df is None or len(df) < 120: return None
     df = df.copy(); close = df['Close']
     
-    # [FIX] 기본 지표(MA20, ATR)를 가장 먼저 계산해야 함 (KeyError 방지)
+    # [Fix] 기본 지표 우선 계산
     df['MA20'] = close.rolling(20).mean()
     df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
     
     # 1. 🏛️ Order Block (SMC)
-    # 조건: 3% 이상 급등 & 거래량 증가한 양봉 직전의 '음봉'
     df['Is_Impulse'] = (df['Close'] > df['Open'] * 1.03) & (df['Volume'] > df['Volume'].rolling(20).mean())
     ob_price = 0
-    # 최근 60일 내 가장 최근의 OB 탐색
     for i in range(len(df)-2, len(df)-60, -1):
         if df['Is_Impulse'].iloc[i]:
-            if df['Close'].iloc[i-1] < df['Open'].iloc[i-1]: # 직전 캔들이 음봉인가?
-                # 오더블럭은 직전 음봉의 (시가+저가)/2 (중심값)
+            if df['Close'].iloc[i-1] < df['Open'].iloc[i-1]:
                 ob_price = (df['Open'].iloc[i-1] + df['Low'].iloc[i-1]) / 2
                 break
-    # [FIX] 위에서 MA20을 먼저 계산했으므로 이제 에러가 안 남
     df['OB'] = ob_price if ob_price > 0 else df['MA20'].iloc[-1]
 
-    # 2. 🧬 Fibonacci 0.618
+    # 2. 🧬 Fibonacci
     hi_1y = df.tail(252)['High'].max()
     lo_1y = df.tail(252)['Low'].min()
     df['Fibo_618'] = hi_1y - ((hi_1y - lo_1y) * 0.618)
 
     # 3. 추가 지표들
-    # Bollinger Bands (User: 50, 0.5)
     ma_bb1 = close.rolling(50).mean(); std_bb1 = close.rolling(50).std()
     df['BB1_Up'] = ma_bb1 + (std_bb1 * 0.5); df['BB1_Lo'] = ma_bb1 - (std_bb1 * 0.5)
     
-    # Snow & RSI & MACD
     df['SNOW_L'] = calc_stoch(df, 20, 12, 12)
     delta = close.diff(); g = delta.where(delta>0,0).rolling(14).mean(); l = -delta.where(delta<0,0).rolling(14).mean()
     df['RSI'] = 100 - (100/(1+(g/(l+1e-9))))
@@ -135,9 +129,12 @@ def get_all_indicators(df):
     exp1 = close.ewm(span=12, adjust=False).mean(); exp2 = close.ewm(span=26, adjust=False).mean()
     df['MACD_Osc'] = (exp1 - exp2) - (exp1 - exp2).ewm(span=9, adjust=False).mean()
 
-    # CCI, MFI, ADX, POC, Vol_Z
+    # [FIX] CCI Calculation (mad() 함수 제거 및 대체)
     tp = (df['High'] + df['Low'] + close) / 3
-    df['CCI'] = (tp - tp.rolling(14).mean()) / (0.015 * tp.rolling(14).apply(lambda x: pd.Series(x).mad()) + 1e-9)
+    # mad() 대신 (x - x.mean()).abs().mean() 사용
+    mad = tp.rolling(14).apply(lambda x: (x - x.mean()).abs().mean())
+    df['CCI'] = (tp - tp.rolling(14).mean()) / (0.015 * mad + 1e-9)
+    
     raw_mf = tp * df['Volume']
     pos_mf = raw_mf.where(tp > tp.shift(1), 0).rolling(14).sum()
     neg_mf = raw_mf.where(tp < tp.shift(1), 0).rolling(14).sum()
@@ -160,7 +157,7 @@ def get_strategy(df, buy_price=0):
     if df is None: return None
     curr = df.iloc[-1]; cp = curr['Close']; atr = curr['ATR']
     
-    # AI ML 예측
+    # AI ML
     data_ml = df.copy()[['RSI','SNOW_L','CCI','MFI','ADX','Vol_Z']].dropna()
     ai_prob = 50
     if len(data_ml) > 60:
@@ -180,7 +177,7 @@ def get_strategy(df, buy_price=0):
         t = 1 if p<2000 else 5 if p<5000 else 10 if p<20000 else 50 if p<50000 else 100 if p<200000 else 500
         return int(round(p/t)*t)
 
-    # [3분할 타점: 4대 지지선 경쟁]
+    # 3분할 타점
     candidates = [
         (adj(curr['POC']), "POC"),
         (adj(curr['OB']), "OB"),
@@ -188,22 +185,17 @@ def get_strategy(df, buy_price=0):
         (adj(curr['BB1_Lo']), "BB")
     ]
     candidates.sort(key=lambda x: x[0], reverse=True)
-    
     valid_buys = [x for x in candidates if x[0] <= cp]
     
     final_buys = []
-    if not valid_buys:
-        final_buys = [adj(cp), adj(cp*0.95), adj(cp*0.90)]
-    elif len(valid_buys) == 1:
-        final_buys = [valid_buys[0][0], adj(valid_buys[0][0]*0.95), adj(valid_buys[0][0]*0.90)]
-    elif len(valid_buys) == 2:
-        final_buys = [valid_buys[0][0], valid_buys[1][0], adj(valid_buys[1][0]*0.95)]
-    else:
-        final_buys = [valid_buys[0][0], valid_buys[1][0], valid_buys[2][0]]
+    if not valid_buys: final_buys = [adj(cp), adj(cp*0.95), adj(cp*0.90)]
+    elif len(valid_buys) == 1: final_buys = [valid_buys[0][0], adj(valid_buys[0][0]*0.95), adj(valid_buys[0][0]*0.90)]
+    elif len(valid_buys) == 2: final_buys = [valid_buys[0][0], valid_buys[1][0], adj(valid_buys[1][0]*0.95)]
+    else: final_buys = [valid_buys[0][0], valid_buys[1][0], valid_buys[2][0]]
 
     sell_pts = [adj(curr['BB1_Up']), adj(cp + atr*3), adj(cp + atr*5)]
     
-    # 점수 산출
+    # 점수
     score = 0
     if curr['SNOW_L'] < tune['snow']: score += 15
     if curr['RSI'] < tune['rsi']: score += 10
@@ -225,7 +217,7 @@ def get_strategy(df, buy_price=0):
 # 🖥️ 4. 메인 UI
 # ==========================================
 with st.sidebar:
-    st.title("🏛️ V65.3 SMC+Fibo")
+    st.title("🏛️ V65.3.2 Fix")
     now = get_now_kst()
     st.info(f"KST: {now.strftime('%H:%M:%S')}")
     tg_token = st.text_input("Bot Token", type="password")
