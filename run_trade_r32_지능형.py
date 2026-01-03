@@ -17,7 +17,7 @@ from sklearn.ensemble import RandomForestClassifier
 def get_now_kst():
     return datetime.datetime.now(timezone(timedelta(hours=9)))
 
-st.set_page_config(page_title="AI Master V67.2.1 Fix", page_icon="🧬", layout="wide")
+st.set_page_config(page_title="AI Master V67.3 Custom Time", page_icon="⏰", layout="wide")
 
 st.markdown("""
     <style>
@@ -35,7 +35,8 @@ st.markdown("""
     .mode-badge { background-color: #263238; color: #00e676; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     .ai-badge { background-color: #6200ea; color: white; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     
-    .clock-box { font-size: 1.2em; font-weight: bold; color: #333; text-align: center; margin-bottom: 10px; padding: 10px; background: #e0f7fa; border-radius: 8px; }
+    /* 실시간 시계 스타일 */
+    .clock-box { font-size: 1.2em; font-weight: bold; color: #333; text-align: center; margin-bottom: 15px; padding: 10px; background: #e0f7fa; border-radius: 8px; border: 1px solid #b2ebf2; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -232,22 +233,32 @@ def get_darwin_strategy(df, buy_price=0):
     return {"buy": final_buys, "sell": sell_pts, "avg": est_avg_price, "score": int(score), "status": status, "ai": ai_prob, "logic": logic_mode, "top_feat": top_feature, "ob": curr['OB']}
 
 # ==========================================
-# 🖥️ 4. 메인 UI (Alerts & Fix)
+# 🖥️ 4. 메인 UI (Custom Time Sidebar)
 # ==========================================
 with st.sidebar:
+    # 1. 실시간 시계
     now = get_now_kst()
     st.markdown(f'<div class="clock-box">⏰ {now.strftime("%H:%M:%S")}</div>', unsafe_allow_html=True)
-    st.title("📡 V67.2.1 Fix")
-    tg_token = st.text_input("Bot Token", type="password")
-    tg_id = st.text_input("Chat ID")
-    scanner_alert = st.checkbox("📢 스캔 결과 자동 전송", value=True)
-    auto_report = st.checkbox("16시 마감 리포트", value=True)
+    st.title("📡 V67.3 Custom Time")
+    
+    # 2. 통합 알림 설정 (Expander로 정리)
+    with st.expander("⚙️ 알림 및 시간 설정", expanded=True):
+        tg_token = st.text_input("Bot Token", type="password")
+        tg_id = st.text_input("Chat ID")
+        
+        st.markdown("---")
+        auto_report = st.checkbox("✅ 자동 리포트 켜기", value=True)
+        # [NEW] 시간 조절 기능 추가
+        report_time = st.time_input("발송 예정 시간", datetime.time(16, 0))
+        scanner_alert = st.checkbox("📢 스캔 결과 자동 전송", value=True)
+    
     min_m = st.number_input("최소 시총(억)", value=3000) * 100000000
     
-    if auto_report and now.hour == 16 and now.minute == 0:
+    # [NEW] 설정된 시간에 리포트 발송
+    if auto_report and now.hour == report_time.hour and now.minute == report_time.minute:
         pf_rep = get_portfolio_gsheets()
         if not pf_rep.empty:
-            msg = "🔔 <b>[16시 마감 리포트]</b>\n"
+            msg = f"🔔 <b>[{report_time.strftime('%H:%M')} 정기 리포트]</b>\n"
             for _, r in pf_rep.iterrows():
                 d = get_data_safe(r['Code'], days=5)
                 if d is not None:
@@ -321,7 +332,7 @@ with tabs[1]: # 스캐너
                     </div>
                 </div>""", unsafe_allow_html=True)
 
-with tabs[2]: # 🧬 진화 검증 (Fix: Indicator calc included)
+with tabs[2]: # 🧬 진화 검증
     st.subheader("🧬 Darwin 진화 성적표 (Time Machine)")
     if st.button("🚀 과거 데이터 검증 시작"):
         pf = get_portfolio_gsheets()
@@ -340,9 +351,7 @@ with tabs[2]: # 🧬 진화 검증 (Fix: Indicator calc included)
                     if abs(past_date_idx) < len(full_df) - 60:
                         past_df_raw = full_df.iloc[:past_date_idx]
                         future_df = full_df.iloc[past_date_idx:]
-                        
-                        # [FIX] Calculate indicators for the past slice
-                        past_df = get_all_indicators(past_df_raw)
+                        past_df = get_all_indicators(past_df_raw) # Fix applied here
                         
                         if past_df is not None and len(future_df) >= 5:
                             res = get_darwin_strategy(past_df)
@@ -355,14 +364,11 @@ with tabs[2]: # 🧬 진화 검증 (Fix: Indicator calc included)
         if results:
             df_res = pd.DataFrame(results).sort_values('Date')
             df_res['Win_Rate'] = (df_res['Win'].cumsum() / df_res['Count'].cumsum() * 100)
-            
             c1, c2 = st.columns(2)
             c1.metric("총 시그널", f"{len(df_res)}회")
             c2.metric("누적 승률", f"{df_res['Win_Rate'].iloc[-1]:.1f}%")
-            
             fig = px.line(df_res, x='Date', y='Win_Rate', title="AI 승률 변화 추이", markers=True)
             fig.add_hline(y=50, line_dash="dot", line_color="gray")
-            fig.update_layout(yaxis_range=[0, 100])
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.error("데이터 부족")
