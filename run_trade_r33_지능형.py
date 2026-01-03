@@ -24,15 +24,15 @@ def check_market_open():
     end_time = datetime.time(15, 30)
     return start_time <= now.time() <= end_time
 
-st.set_page_config(page_title="AI Master V68.8 Source Track", page_icon="📡", layout="wide")
+st.set_page_config(page_title="AI Master V69.2 Calibration", page_icon="⚖️", layout="wide")
 
 st.markdown("""
     <style>
     .stApp { background-color: #f0f2f6; }
-    .metric-card { background: white; padding: 20px; border-radius: 12px; border-left: 5px solid #1a237e; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+    .metric-card { background: white; padding: 20px; border-radius: 12px; border-left: 5px solid #4a148c; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
     .scanner-card { padding: 20px; border-radius: 15px; border: 1px solid #e0e0e0; margin-bottom: 15px; background-color: white; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
     
-    .buy-box { background-color: #e8eaf6; padding: 15px; border-radius: 10px; border: 1px solid #c5cae9; color: #1a237e; margin-bottom: 10px; }
+    .buy-box { background-color: #e3f2fd; padding: 15px; border-radius: 10px; border: 1px solid #90caf9; color: #0d47a1; margin-bottom: 10px; }
     .sell-box { background-color: #ffebee; padding: 15px; border-radius: 10px; border: 1px solid #ef9a9a; color: #b71c1c; margin-bottom: 10px; }
     .avg-text { font-weight: bold; color: #4a148c; text-align: center; background-color: #f3e5f5; padding: 5px; border-radius: 5px; margin-top: 5px; border: 1px solid #e1bee7; }
     
@@ -40,7 +40,7 @@ st.markdown("""
     .current-price { font-size: 1.5em; font-weight: bold; color: #333; }
     .logic-tag { font-size: 0.75em; color: #444; background-color: #eceff1; padding: 2px 6px; border-radius: 4px; margin-left: 5px; border: 1px solid #cfd8dc; }
     .mode-badge { background-color: #263238; color: #00e676; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
-    .ai-badge { background-color: #311b92; color: white; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
+    .ai-badge { background-color: #4a148c; color: white; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 0.85em; }
     .pro-tag { background-color: #fff3e0; color: #e65100; font-size: 0.75em; padding: 2px 5px; border-radius: 4px; border: 1px solid #ffe0b2; font-weight:bold; }
     .hit-tag { background-color: #e8f5e9; color: #2e7d32; font-size: 0.8em; padding: 3px 6px; border-radius: 4px; margin-right: 5px; border: 1px solid #c8e6c9; display: inline-block; margin-bottom: 2px; }
     
@@ -51,35 +51,28 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- [Data Loader: Source Tracking] ---
+# --- [Data Loader] ---
 @st.cache_data(ttl=60)
 def get_data_safe(code, days=2000):
     start_date = (get_now_kst() - timedelta(days=days)).strftime('%Y-%m-%d')
-    
-    # 1. Try KRX (FDR)
     try:
         df = fdr.DataReader(code, start_date)
         if df is not None and not df.empty:
-            df.attrs['source'] = "🇰🇷 KRX (FDR)" # 메타데이터 저장
+            df.attrs['source'] = "🇰🇷 KRX (FDR)"
             return df
     except: pass
-    
-    # 2. Try Yahoo Finance (KS)
     try:
         df = yf.download(f"{code}.KS", start=start_date, progress=False)
         if not df.empty:
             df.attrs['source'] = "🇺🇸 Yahoo (KOSPI)"
             return df
     except: pass
-    
-    # 3. Try Yahoo Finance (KQ)
     try:
         df = yf.download(f"{code}.KQ", start=start_date, progress=False)
         if not df.empty:
             df.attrs['source'] = "🇺🇸 Yahoo (KOSDAQ)"
             return df
     except: pass
-    
     return None
 
 @st.cache_data(ttl=86400)
@@ -115,7 +108,7 @@ def send_telegram_msg(token, chat_id, message):
         except: pass
 
 # ==========================================
-# 📊 2. Pro-Quant 지표 엔진
+# 📊 2. Grand Unified 지표 엔진
 # ==========================================
 def calc_stoch(df, n, m, t):
     l, h = df['Low'].rolling(n).min(), df['High'].rolling(n).max()
@@ -178,12 +171,13 @@ def get_all_indicators(df):
     return df
 
 # ==========================================
-# 🧠 3. Pro-Quant 전략
+# 🧠 3. Grand Unified 전략 (Calibrated)
 # ==========================================
 def get_darwin_strategy(df, buy_price=0):
     if df is None: return None
     curr = df.iloc[-1]; cp = curr['Close']; atr = curr['ATR']; prev = df.iloc[-2]
     
+    # 1. Feature Selection
     df['BB_Pos'] = (cp - curr['BB_Lo']) / (curr['BB_Up'] - curr['BB_Lo'] + 1e-9)
     features = ['RSI','SNOW_L','CCI','MFI','ADX','Vol_Z', 'BB_Pos', 'ER']
     data_ml = df.copy()[features].dropna()
@@ -194,7 +188,6 @@ def get_darwin_strategy(df, buy_price=0):
             model = RandomForestClassifier(n_estimators=60, random_state=42, max_depth=5)
             train_df = data_ml.iloc[:-1]; train_df['Target'] = (df['Close'].shift(-1).iloc[:-1] > df['Close'].iloc[:-1]).astype(int)
             model.fit(train_df.tail(200), train_df['Target'].tail(200))
-            
             top_idx = np.argmax(model.feature_importances_); top_feature = features[top_idx]
             ai_prob = int(model.predict_proba(data_ml.iloc[-1:])[0][1] * 100)
             
@@ -204,21 +197,35 @@ def get_darwin_strategy(df, buy_price=0):
             elif top_feature == 'BB_Pos': logic_mode = "🌊 Mean Reversion"
         except: pass
 
-    score = 0; hit_reasons = []
-    if cp >= curr['MVWAP']: score += 15; hit_reasons.append("기관수급위")
-    if curr['ER'] > 0.5: score += 10; hit_reasons.append("추세효율↑")
-    if curr['ADX'] > 25: score += 10; hit_reasons.append("추세강도↑")
-    if curr['RSI'] < 35: score += 15; hit_reasons.append("RSI과매도")
-    if curr['CCI'] < -100: score += 15; hit_reasons.append("CCI침체")
-    if curr['MACD_Hist'] > prev['MACD_Hist']: score += 10; hit_reasons.append("MACD반전")
+    # 2. Score Calibration (Zero Adjustment)
+    score = 0; hit_reasons = [] 
+    
+    # A. Basic Points (누구나 받는 점수)
+    if cp > curr['MA20']: score += 10; hit_reasons.append("MA20위") # [NEW] 기본 점수
+    if curr['MACD_Hist'] > 0: score += 5 # [NEW] MACD 양수
+    
+    # B. Pro & Smart Money
+    if cp >= curr['MVWAP']: score += 15; hit_reasons.append("기관수급")
     if cp <= curr['OB'] * 1.05: score += 20; hit_reasons.append("OB지지")
-    if curr['MFI'] < 20: score += 10; hit_reasons.append("MFI바닥")
-    if curr['Squeeze']: score += 15; hit_reasons.append("변동성응축")
+    if curr['Squeeze']: score += 15; hit_reasons.append("응축")
+    
+    # C. Gradation Scoring (부분 점수)
+    if curr['RSI'] < 35: score += 15; hit_reasons.append("RSI과매도")
+    elif curr['RSI'] < 45: score += 5 # [NEW] 약한 과매도도 인정
+    
+    if curr['CCI'] < -100: score += 15; hit_reasons.append("CCI침체")
+    elif curr['CCI'] < -80: score += 5 # [NEW]
+    
+    if curr['ER'] > 0.5: score += 10; hit_reasons.append("추세효율")
+    
+    # D. AI Score (Relaxed Safety Lock)
+    if ai_prob >= 60: 
+        score += (ai_prob - 50) * 1.5 # 60% -> +15점
+    elif ai_prob <= 40: 
+        score -= 20 # 명확한 부정일 때만 감점
+    # 41~59% 구간은 점수 변동 없음 (Neutral)
 
-    if ai_prob >= 60: score += (ai_prob * 0.4)
-    elif ai_prob <= 40: score -= 20
-    else: score = score * 0.8
-
+    # 3. Pricing
     def adj(p):
         if np.isnan(p) or p <= 0: return 0
         t = 1 if p<2000 else 5 if p<5000 else 10 if p<20000 else 50 if p<50000 else 100 if p<200000 else 500
@@ -259,7 +266,7 @@ def get_darwin_strategy(df, buy_price=0):
     return {"buy": final_buys, "sell": sell_pts, "avg": est_avg, "score": int(score), "status": status, "ai": ai_prob, "logic": logic_mode, "top_feat": top_feature, "reasons": hit_reasons, "mvwap": curr['MVWAP']}
 
 # ==========================================
-# 🖥️ 4. 메인 UI (Source Tracking)
+# 🖥️ 4. 메인 UI
 # ==========================================
 with st.sidebar:
     now = get_now_kst()
@@ -269,11 +276,10 @@ with st.sidebar:
     if is_market_open: st.markdown('<div class="status-open">🟢 KOSPI/KOSDAQ 장중</div>', unsafe_allow_html=True)
     else: st.markdown('<div class="status-closed">🔴 정규장 마감 (휴장)</div>', unsafe_allow_html=True)
     
-    # [NEW] 소스 표시 컨테이너
     source_container = st.empty()
     source_container.markdown('<div class="source-box">📡 Ready</div>', unsafe_allow_html=True)
     
-    st.title("📡 V68.8 Source Track")
+    st.title("⚖️ V69.2 Calibration")
     
     with st.expander("⚙️ 설정 및 자동화", expanded=True):
         tg_token = st.text_input("Bot Token", type="password")
@@ -292,7 +298,7 @@ with st.sidebar:
     if auto_report and now.hour == report_time.hour and now.minute == report_time.minute:
         pf_rep = get_portfolio_gsheets()
         if not pf_rep.empty:
-            msg = f"🎩 <b>[{report_time.strftime('%H:%M')} Pro 리포트]</b>\n"
+            msg = f"⚖️ <b>[{report_time.strftime('%H:%M')} 정기 리포트]</b>\n"
             for _, r in pf_rep.iterrows():
                 d = get_data_safe(r['Code'], days=5)
                 if d is not None:
@@ -310,13 +316,12 @@ with tabs[0]: # 대시보드
         for _, row in pf.iterrows():
             d = get_data_safe(row['Code'], days=200)
             if d is not None:
-                last_source = d.attrs.get('source', 'Unknown') # 소스 추출
+                last_source = d.attrs.get('source', 'Unknown')
                 df = get_all_indicators(d)
                 res = get_darwin_strategy(df, row['Buy_Price'])
                 cp = df['Close'].iloc[-1]; t_buy += (row['Buy_Price']*row['Qty']); t_eval += (cp*row['Qty'])
                 dash_list.append({"종목": row['Name'], "수익": (cp-row['Buy_Price'])*row['Qty'], "상태": res['status']['type']})
         
-        # [NEW] 사이드바 소스 업데이트
         source_container.markdown(f'<div class="source-box">📡 {last_source}</div>', unsafe_allow_html=True)
         
         c1, c2, c3 = st.columns(3)
@@ -330,7 +335,7 @@ with tabs[0]: # 대시보드
         else: time.sleep(refresh_min * 60); st.rerun()
 
 with tabs[1]: # 스캐너
-    if st.button("🎩 Pro-Quant 스캔") or (auto_refresh and (not only_market_time or is_market_open)):
+    if st.button("⚖️ 캘리브레이션 스캔") or (auto_refresh and (not only_market_time or is_market_open)):
         if auto_refresh: st.info(f"🔄 자동 스캔 중... (주기: {refresh_min}분)")
         krx = get_safe_stock_listing(); targets = krx[krx['Marcap'] >= min_m].sort_values('Marcap', ascending=False).head(50)
         found, prog = [], st.progress(0)
@@ -344,15 +349,14 @@ with tabs[1]: # 스캐너
                     found.append({"name": futs[f], "score": s['score'], "strat": s, "cp": cp})
                 prog.progress((i+1)/len(targets))
         
-        # 스캔 완료 후 사이드바 갱신 (보통 KRX)
         source_container.markdown(f'<div class="source-box">📡 🇰🇷 KRX (Scanner)</div>', unsafe_allow_html=True)
         
         top_picks = sorted(found, key=lambda x: x['score'], reverse=True)[:15]
         if scanner_alert and top_picks and tg_token and tg_id:
-            msg = f"🚀 <b>[AI Pro 스캔 Top 5]</b> ({now.strftime('%H:%M')})\n\n"
+            msg = f"🚀 <b>[AI 스캔 Top 5]</b> ({now.strftime('%H:%M')})\n\n"
             for item in top_picks[:5]:
                 s = item['strat']
-                msg += f"<b>{item['name']}</b> ({s['logic']})\n💰 {item['cp']:,}원 / 🎯 {s['buy'][0][0]:,}원\n🏆 {s['score']}점 (MVWAP:{s['mvwap']:,})\n\n"
+                msg += f"<b>{item['name']}</b> ({s['logic']})\n💰 {item['cp']:,}원 / 🎯 {s['buy'][0][0]:,}원\n🏆 {s['score']}점 (AI:{s['ai']}%)\n\n"
             send_telegram_msg(tg_token, tg_id, msg)
             st.toast("📨 텔레그램 전송 완료!")
 
@@ -377,29 +381,51 @@ with tabs[1]: # 스캐너
         else: time.sleep(refresh_min * 60); st.rerun()
 
 with tabs[2]: # 5년 검증
-    st.subheader("🧬 5년 진화 성적표 (Pro Logic)")
+    st.subheader("🧬 5년 진화 성적표 (Calibrated)")
     if st.button("🚀 5년 데이터 검증 시작"):
-        # ... (검증 로직 동일) ...
-        source_container.markdown(f'<div class="source-box">📡 Time Machine</div>', unsafe_allow_html=True)
-        # (검증 코드 생략 - 위와 동일)
-        st.info("검증 로직 실행")
+        # (검증 코드 동일)
+        pf = get_portfolio_gsheets()
+        sample_codes = pf['Code'].tolist() if not pf.empty else []
+        fb = get_safe_stock_listing().head(5)['Code'].tolist()
+        targets = list(set(sample_codes + fb))[:10]
+        results = []
+        prog = st.progress(0)
+        for idx, code in enumerate(targets):
+            full_df_raw = get_data_safe(code, days=2000)
+            if full_df_raw is not None and len(full_df_raw) > 300:
+                full_df = get_all_indicators(full_df_raw)
+                if full_df is not None:
+                    for i in range(240, 0, -1):
+                        past_idx = - (i * 5)
+                        if abs(past_idx) < len(full_df) - 60 and abs(past_idx) < len(full_df):
+                            past_df = full_df.iloc[:past_idx]; future_df = full_df.iloc[past_idx:]
+                            if len(future_df) >= 5:
+                                res = get_darwin_strategy(past_df)
+                                if res['score'] >= 50:
+                                    entry = past_df['Close'].iloc[-1]; exit_p = future_df['Close'].iloc[4]
+                                    results.append({"Date": past_df.index[-1], "Win": 1 if exit_p > entry else 0, "Count": 1})
+            prog.progress((idx+1)/len(targets))
+        if results:
+            df_res = pd.DataFrame(results).sort_values('Date')
+            df_res['Win_Rate'] = (df_res['Win'].cumsum() / df_res['Count'].cumsum() * 100)
+            c1, c2 = st.columns(2)
+            c1.metric("총 검증", f"{len(df_res)}회"); c2.metric("누적 승률", f"{df_res['Win_Rate'].iloc[-1]:.1f}%")
+            fig = px.line(df_res, x='Date', y='Win_Rate', title="5년 승률 변화", markers=False)
+            fig.add_hline(y=50, line_dash="dot", line_color="gray"); st.plotly_chart(fig, use_container_width=True)
+        else: st.error("데이터 부족")
 
 with tabs[3]: # AI 리포트
     if not pf.empty:
         sel = st.selectbox("종목 선택", pf['Name'].unique())
         row = pf[pf['Name'] == sel].iloc[0]
-        
-        # [NEW] 원본 데이터 가져와서 소스 확인
         raw_df = get_data_safe(row['Code'], days=365)
         if raw_df is not None:
-            current_source = raw_df.attrs.get('source', 'Unknown')
-            source_container.markdown(f'<div class="source-box">📡 {current_source}</div>', unsafe_allow_html=True)
-            
+            source_container.markdown(f'<div class="source-box">📡 {raw_df.attrs.get("source","Unknown")}</div>', unsafe_allow_html=True)
             df_ai = get_all_indicators(raw_df)
             res = get_darwin_strategy(df_ai, row['Buy_Price'])
             cp = df_ai['Close'].iloc[-1]
             if st.button("📡 전략 전송"):
-                msg = f"🎩 <b>[{sel}] Pro 전략</b>\n💰 {cp:,}원\n\n🔵 1차: {res['buy'][0][0]:,}원\n🔴 1차: {res['sell'][0][0]:,}원\n💡 평단: {res['avg']:,}원"
+                msg = f"⚖️ <b>[{sel}] 전략</b>\n💰 {cp:,}원\n\n🔵 1차: {res['buy'][0][0]:,}원\n🔴 1차: {res['sell'][0][0]:,}원\n💡 평단: {res['avg']:,}원"
                 send_telegram_msg(tg_token, tg_id, msg); st.success("전송 완료")
             
             reasons_html = "".join([f"<span class='hit-tag'>✅ {r}</span>" for r in res['reasons']])
