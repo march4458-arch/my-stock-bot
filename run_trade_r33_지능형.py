@@ -53,16 +53,12 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- [Data Loader: V71.7 Direct Connect (No Local File)] ---
-# 메모리 캐시 1시간 유지 (TTL=3600)
+# --- [Data Loader: Direct Connect] ---
 @st.cache_data(ttl=3600) 
 def get_data_safe(code, days=2000):
     start_date = (get_now_kst() - timedelta(days=days)).strftime('%Y-%m-%d')
-
-    # 차단 방지용 최소 딜레이 (필수)
-    time.sleep(0.2)
+    time.sleep(0.2) # 차단 방지 딜레이
     
-    # 1. KRX 시도
     try:
         df = fdr.DataReader(code, start_date)
         if df is not None and not df.empty:
@@ -70,7 +66,6 @@ def get_data_safe(code, days=2000):
             return df
     except: pass
     
-    # 2. Yahoo KOSPI 시도
     try:
         df = yf.download(f"{code}.KS", start=start_date, progress=False)
         if not df.empty:
@@ -78,7 +73,6 @@ def get_data_safe(code, days=2000):
             return df
     except: pass
     
-    # 3. Yahoo KOSDAQ 시도
     try:
         df = yf.download(f"{code}.KQ", start=start_date, progress=False)
         if not df.empty:
@@ -494,8 +488,18 @@ with tabs[3]: # AI 리포트
 with tabs[4]: # 관리
     df_p = get_portfolio_gsheets()
     with st.form("add"):
-        c1, c2, c3 = st.columns(3); n, p, q = c1.text_input("종목명"), c2.number_input("평단가"), c3.number_input("수량")
+        c1, c2, c3 = st.columns(3)
+        n = c1.text_input("종목명")
+        p = c2.number_input("평단가")
+        q = c3.number_input("수량")
+        
         if st.form_submit_button("등록"):
             m = krx_list[krx_list['Name']==n]
             if not m.empty:
-                new = pd.DataFrame([[m.iloc[0]['Code'], n, p, q]], columns=['Code', 'Name', 'Buy_Price',
+                new = pd.DataFrame([[m.iloc[0]['Code'], n, p, q]], columns=['Code', 'Name', 'Buy_Price', 'Qty'])
+                st.connection("gsheets", type=GSheetsConnection).update(data=pd.concat([df_p, new], ignore_index=True))
+                st.rerun()
+            else:
+                st.error("종목을 찾을 수 없습니다.")
+                
+    st.dataframe(df_p, use_container_width=True)
