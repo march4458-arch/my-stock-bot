@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import FinanceDataReader as fdr
 import yfinance as yf
-import datetime, time, requests, os, glob
+import datetime, time, requests
 from datetime import timezone, timedelta
 import numpy as np
 import plotly.express as px
@@ -24,7 +24,7 @@ def check_market_open():
     end_time = datetime.time(15, 30)
     return start_time <= now.time() <= end_time
 
-st.set_page_config(page_title="AI Master V71.6 Status Check", page_icon="🔌", layout="wide")
+st.set_page_config(page_title="AI Master V71.7 Direct", page_icon="⚡", layout="wide")
 
 st.markdown("""
     <style>
@@ -53,59 +53,36 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- [Data Loader: V71.6 Connection Visibility] ---
-@st.cache_data(ttl=43200) 
+# --- [Data Loader: V71.7 Direct Connect (No Local File)] ---
+# 메모리 캐시 1시간 유지 (TTL=3600)
+@st.cache_data(ttl=3600) 
 def get_data_safe(code, days=2000):
-    save_dir = "stock_data"
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-    
-    now = get_now_kst()
-    if now.weekday() == 5: target_date = now - timedelta(days=1)
-    elif now.weekday() == 6: target_date = now - timedelta(days=2)
-    else: target_date = now
-        
-    today_str = target_date.strftime('%Y%m%d')
-    file_path = f"{save_dir}/{code}_{today_str}.csv"
-    start_date = (target_date - timedelta(days=days)).strftime('%Y-%m-%d')
+    start_date = (get_now_kst() - timedelta(days=days)).strftime('%Y-%m-%d')
 
-    # 1. 로컬 파일 확인 & 시간 표시
-    if os.path.exists(file_path):
-        try:
-            # 파일 수정 시간 가져오기
-            mtime = os.path.getmtime(file_path)
-            file_time = datetime.datetime.fromtimestamp(mtime).strftime('%H:%M')
-            
-            df = pd.read_csv(file_path, index_col=0, parse_dates=True)
-            if not df.empty:
-                df.attrs['source'] = f"💾 Local ({file_time})"
-                return df
-        except: pass
-
-    # 2. 다운로드 (연결 시도)
+    # 차단 방지용 최소 딜레이 (필수)
     time.sleep(0.2)
     
+    # 1. KRX 시도
     try:
         df = fdr.DataReader(code, start_date)
         if df is not None and not df.empty:
-            df.to_csv(file_path)
-            df.attrs['source'] = "⚡ KRX (Live Connect)"
+            df.attrs['source'] = "⚡ KRX (Direct)"
             return df
     except: pass
     
+    # 2. Yahoo KOSPI 시도
     try:
         df = yf.download(f"{code}.KS", start=start_date, progress=False)
         if not df.empty:
-            df.to_csv(file_path)
-            df.attrs['source'] = "⚡ Yahoo (Live Connect)"
+            df.attrs['source'] = "⚡ Yahoo (Direct)"
             return df
     except: pass
     
+    # 3. Yahoo KOSDAQ 시도
     try:
         df = yf.download(f"{code}.KQ", start=start_date, progress=False)
         if not df.empty:
-            df.to_csv(file_path)
-            df.attrs['source'] = "⚡ Yahoo (Live Connect)"
+            df.attrs['source'] = "⚡ Yahoo (Direct)"
             return df
     except: pass
     
@@ -334,7 +311,7 @@ with st.sidebar:
     krx_list, list_src = get_safe_stock_listing()
     st.markdown(f'<div class="list-box">📋 {list_src}</div>', unsafe_allow_html=True)
 
-    st.title("🔌 V71.6 Status Check")
+    st.title("⚡ V71.7 Direct")
     
     with st.expander("⚙️ 설정 및 자동화", expanded=True):
         tg_token = st.text_input("Bot Token", type="password")
@@ -347,25 +324,13 @@ with st.sidebar:
         auto_refresh = st.checkbox("🔄 자동 갱신 (PC)", value=False)
         only_market_time = st.checkbox("⏰ 정규장에만 실행", value=True)
         refresh_min = st.slider("주기(분)", 1, 60, 5)
-        
-        # [NEW] Force Refresh Button
-        if st.button("🗑️ 금일 캐시 삭제 (강제 연결)"):
-            try:
-                files = glob.glob("stock_data/*.csv")
-                for f in files: os.remove(f)
-                st.cache_data.clear() # 메모리 캐시도 초기화
-                st.success("✅ 캐시 삭제 완료! 다시 스캔하세요.")
-                time.sleep(1)
-                st.rerun()
-            except Exception as e:
-                st.error(f"삭제 실패: {e}")
     
     min_m = st.number_input("최소 시총(억)", value=3000) * 100000000
     
     if auto_report and now.hour == report_time.hour and now.minute == report_time.minute:
         pf_rep = get_portfolio_gsheets()
         if not pf_rep.empty:
-            msg = f"🔌 <b>[{report_time.strftime('%H:%M')} 정기 리포트]</b>\n"
+            msg = f"⚡ <b>[{report_time.strftime('%H:%M')} 정기 리포트]</b>\n"
             for _, r in pf_rep.iterrows():
                 d = get_data_safe(r['Code'], days=5)
                 if d is not None:
@@ -402,7 +367,7 @@ with tabs[0]: # 대시보드
         else: time.sleep(refresh_min * 60); st.rerun()
 
 with tabs[1]: # 스캐너
-    if st.button("🔌 상태체크 스캔") or (auto_refresh and (not only_market_time or is_market_open)):
+    if st.button("⚡ 다이렉트 스캔") or (auto_refresh and (not only_market_time or is_market_open)):
         if auto_refresh: st.info(f"🔄 자동 스캔 중... (주기: {refresh_min}분)")
         
         targets = krx_list[krx_list['Marcap'] >= min_m].sort_values('Marcap', ascending=False).head(50)
@@ -422,7 +387,7 @@ with tabs[1]: # 스캐너
         
         top_picks = sorted(found, key=lambda x: x['score'], reverse=True)[:15]
         if scanner_alert and top_picks and tg_token and tg_id:
-            msg = f"🔌 <b>[AI Status 스캔]</b>\n\n"
+            msg = f"⚡ <b>[AI Direct 스캔]</b>\n\n"
             for item in top_picks[:5]:
                 s = item['strat']
                 msg += f"<b>{item['name']}</b> ({s['logic']})\n💰 {item['cp']:,}원\n🏆 {s['score']}점\n\n"
@@ -453,7 +418,7 @@ with tabs[1]: # 스캐너
         else: time.sleep(refresh_min * 60); st.rerun()
 
 with tabs[2]: # 5년 검증
-    st.subheader("🧬 5년 진화 성적표 (Status Ver)")
+    st.subheader("🧬 5년 진화 성적표 (Direct Ver)")
     status_text = st.empty()
     if st.button("🚀 5년 데이터 검증 시작"):
         pf = get_portfolio_gsheets()
@@ -504,7 +469,7 @@ with tabs[3]: # AI 리포트
             res = get_darwin_strategy(df_ai, row['Buy_Price'])
             cp = df_ai['Close'].iloc[-1]
             if st.button("📡 전략 전송"):
-                msg = f"🔌 <b>[{sel}] 전략</b>\n💰 {cp:,}원\n\n🔵 1차: {res['buy'][0][0]:,}원\n🔴 1차: {res['sell'][0][0]:,}원\n💡 평단: {res['avg']:,}원"
+                msg = f"⚡ <b>[{sel}] 전략</b>\n💰 {cp:,}원\n\n🔵 1차: {res['buy'][0][0]:,}원\n🔴 1차: {res['sell'][0][0]:,}원\n💡 평단: {res['avg']:,}원"
                 send_telegram_msg(tg_token, tg_id, msg); st.success("전송 완료")
             
             reasons_html = "".join([f"<span class='hit-tag'>✅ {r}</span>" for r in res['reasons']])
@@ -533,6 +498,4 @@ with tabs[4]: # 관리
         if st.form_submit_button("등록"):
             m = krx_list[krx_list['Name']==n]
             if not m.empty:
-                new = pd.DataFrame([[m.iloc[0]['Code'], n, p, q]], columns=['Code', 'Name', 'Buy_Price', 'Qty'])
-                st.connection("gsheets", type=GSheetsConnection).update(data=pd.concat([df_p, new], ignore_index=True)); st.rerun()
-    st.dataframe(df_p, use_container_width=True)
+                new = pd.DataFrame([[m.iloc[0]['Code'], n, p, q]], columns=['Code', 'Name', 'Buy_Price',
